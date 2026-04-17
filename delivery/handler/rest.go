@@ -8,4 +8,6 @@ import (
 
 func Rest(r *gin.Engine) {
 	r.GET("/ping", service.Ping)
+	
+	r.GET("/api/qris", GenerateQRIS)
 }
