@@ -1,26 +1,24 @@
-package handler
+package service
 
 import (
 	"net/http"
 	"strconv"
 
-	"qris-latency-optimizer/usecase/service"
-
 	"github.com/gin-gonic/gin"
 )
 
-func GenerateQRIS(c *gin.Context) {
+func GenerateDynamic(c *gin.Context) {
 	amountStr := c.Query("amount")
 
 	amount, err := strconv.Atoi(amountStr)
-	if err != nil {
+	if err != nil || amount <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "invalid amount",
 		})
 		return
 	}
 
-	qr := service.GenerateQRIS(amount)
+	qr := GenerateQRIS(amount)
 
 	c.JSON(http.StatusOK, gin.H{
 		"qris_payload": qr,

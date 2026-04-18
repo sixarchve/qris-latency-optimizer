@@ -1,9 +1,13 @@
 package service
 
-import "github.com/gin-gonic/gin"
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
 
 
 func Ping(c *gin.Context) {
-    c.JSON(200, gin.H{"message": "pong"})
+    c.JSON(http.StatusOK, gin.H{"message": "pong"})
 }
 
