@@ -4,32 +4,44 @@ services:
     image: postgres:15-alpine
     container_name: qris_postgres
     environment:
-      POSTGRES_USER: user_qris
-      POSTGRES_PASSWORD: password_qris
-      POSTGRES_DB: qris_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: user
+      POSTGRES_DB: qrisdatabase
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-db:/docker-entrypoint-initdb.d
+      # - ./init-db:/docker-entrypoint-initdb.d
 
-  # Redis untuk Caching Layer (Kunci optimasi latency p95)
-  redis:
-    image: redis:7-alpine
-    container_name: qris_redis
-    ports:
-      - "6379:6379"
+  # # Redis untuk Caching Layer (Kunci optimasi latency p95)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: qris_redis
+  #   ports:
+  #     - "6379:6379"
 
-  # RabbitMQ untuk Message Broker (Proses Asynchronous)
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: qris_rabbitmq
-    ports:
-      - "5672:5672"   # Port data
-      - "15672:15672" # Port Dashboard (bisa dibuka di browser)
+  # # RabbitMQ untuk Message Broker (Proses Asynchronous)
+  # rabbitmq:
+  #   image: rabbitmq:3-management-alpine
+  #   container_name: qris_rabbitmq
+  #   ports:
+  #     - "5672:5672"   # Port data
+  #     - "15672:15672" # Port Dashboard (bisa dibuka di browser)
+  #   environment:
+  #     RABBITMQ_DEFAULT_USER: guest
+  #     RABBITMQ_DEFAULT_PASS: guest
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
 
 volumes:
   postgres_data:
