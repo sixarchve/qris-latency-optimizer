@@ -26,20 +26,27 @@ export default function App() {
   const [payload, setPayload] = useState("");
   const [merchant, setMerchant] = useState({ merchantName: "", city: "" });
   const [loading, setLoading] = useState(true);
-  const [amount] = useState(75000);
+  const [inputAmount, setInputAmount] = useState(1000);
+  const [submittedAmount, setSubmittedAmount] = useState(1000);
 
   useEffect(() => {
-    const data = {
-      qris_payload:
-        "00020101021226320014ID.CO.QRIS.WWW01101234567890520454115303360540410075802ID5912AETHER STORE6006MALANG63041758",
-    };
-
-    setTimeout(() => {
-      setPayload(data.qris_payload);
-      setMerchant(parseQrisPayload(data.qris_payload));
-      setLoading(false);
-    }, 800);
-  }, []);
+    if (!submittedAmount || submittedAmount <= 0) {
+      setPayload("");
+      return;
+    }
+    setLoading(true);
+    fetch("/api/qris?amount=" + submittedAmount)
+      .then(res => res.json())
+      .then(data => {
+        setPayload(data.qris_payload);
+        setMerchant(parseQrisPayload(data.qris_payload));
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error("Failed to fetch QRIS payload", err);
+        setLoading(false);
+      });
+  }, [submittedAmount]);
 
   const formatRupiah = new Intl.NumberFormat("id-ID", {
     style: "currency",
@@ -61,13 +68,27 @@ export default function App() {
         </div>
 
         <div style={styles.merchant}>
-          <h2 style={{color: "black" }}>{merchant.merchantName}</h2>
-          <p style={{color: "black" }}>{merchant.city}</p>
+          <h2 style={{ color: "black" }}>{merchant.merchantName}</h2>
+          <p style={{ color: "black" }}>{merchant.city}</p>
         </div>
 
         <div style={styles.amountBox}>
-          <p style={{ color: "black" }}>AMOUNT</p>
-          <h2 style={{ color: "black" }}>{formatRupiah.format(amount)}</h2>
+          <p style={{ color: "black", fontSize: "12px", fontWeight: "bold" }}>ENTER AMOUNT (IDR)</p>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+            <input
+              type="number"
+              value={inputAmount}
+              onChange={(e) => setInputAmount(e.target.value === '' ? '' : Number(e.target.value))}
+              style={styles.amountInput}
+              min="1"
+            />
+            <button
+              onClick={() => setSubmittedAmount(inputAmount)}
+              style={styles.generateButton}
+            >
+              Generate
+            </button>
+          </div>
         </div>
 
         <div style={styles.qrWrapper}>
@@ -155,6 +176,29 @@ const styles = {
     background: "#fce7e7",
     borderRadius: "16px",
     textAlign: "center",
+  },
+  amountInput: {
+    flex: 1,
+    fontSize: "20px",
+    fontWeight: "bold",
+    textAlign: "center",
+    width: "100%",
+    border: "none",
+    background: "white",
+    borderRadius: "8px",
+    color: "black",
+    outline: "none",
+    padding: "8px"
+  },
+  generateButton: {
+    padding: "8px 16px",
+    background: "#ef4444",
+    color: "white",
+    border: "none",
+    borderRadius: "8px",
+    fontWeight: "bold",
+    cursor: "pointer",
+    boxShadow: "0 4px 6px rgba(239, 68, 68, 0.3)",
   },
   qrWrapper: {
     margin: "20px",

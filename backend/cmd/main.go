@@ -3,6 +3,7 @@ package main
 import (
 	"qris-latency-optimizer/delivery/handler"
 	"qris-latency-optimizer/repository/database"
+
 	"github.com/gin-gonic/gin"
 )
 
