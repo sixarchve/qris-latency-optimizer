@@ -3,7 +3,7 @@ package redis
 import (
 	"context"
 	"fmt"
-	"os"
+	"qris-latency-optimizer/config"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -21,18 +21,8 @@ const (
 
 // ConnectRedis - koneksi ke Redis
 func ConnectRedis() {
-	redisHost := os.Getenv("REDIS_HOST")
-	if redisHost == "" {
-		redisHost = "localhost"
-	}
-
-	redisPort := os.Getenv("REDIS_PORT")
-	if redisPort == "" {
-		redisPort = "6379"
-	}
-
 	RedisClient = goredis.NewClient(&goredis.Options{
-		Addr: fmt.Sprintf("%s:%s", redisHost, redisPort),
+		Addr: config.App.RedisAddr(),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

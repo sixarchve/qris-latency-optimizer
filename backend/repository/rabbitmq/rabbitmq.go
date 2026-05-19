@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
+	"qris-latency-optimizer/config"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -16,18 +16,9 @@ var (
 	Queue   amqp.Queue
 )
 
-// getRabbitMQURL reads the connection URL from env with fallback default
-func getRabbitMQURL() string {
-	url := os.Getenv("RABBITMQ_URL")
-	if url == "" {
-		url = "amqp://guest:guest@localhost:5672/"
-	}
-	return url
-}
-
 // ConnectRabbitMQ connects to RabbitMQ with retry logic (3 attempts)
 func ConnectRabbitMQ() {
-	url := getRabbitMQURL()
+	url := config.App.RabbitMQURL()
 	var err error
 
 	maxRetries := 3
@@ -66,7 +57,7 @@ func ConnectRabbitMQ() {
 		log.Fatalf("Failed to declare queue: %v", err)
 	}
 
-	fmt.Println("✓ RabbitMQ connected successfully & Queue declared")
+	fmt.Println("RabbitMQ connected successfully & Queue declared")
 }
 
 // PublishMessage publishes a JSON message to the payment_confirmations queue

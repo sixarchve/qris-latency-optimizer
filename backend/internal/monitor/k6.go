@@ -1,4 +1,4 @@
-package service
+package monitor
 
 import (
 	"math"
@@ -76,23 +76,48 @@ func PostK6Data(c *gin.Context) {
 	})
 }
 
+// RecordLatencyEvent allows internal components like the latency tracker middleware to record data
+func RecordLatencyEvent(scenario string, timestamp time.Time, durationMs float64, statusCode int) {
+	k6StoreLock.Lock()
+	defer k6StoreLock.Unlock()
+
+	point := K6DataPoint{
+		Timestamp: timestamp,
+		Scenario:  scenario,
+		Metric:    "http_req_duration",
+		Value:     durationMs,
+		Status:    statusCode,
+		Error:     statusCode >= 400,
+	}
+
+	k6Store[scenario] = append(k6Store[scenario], point)
+
+	if _, exists := k6Runs[scenario]; !exists {
+		k6Runs[scenario] = &K6TestRun{
+			Scenario:  scenario,
+			StartedAt: timestamp,
+			IsActive:  true,
+		}
+	}
+}
+
 // K6Summary sends the final summary from k6's handleSummary
 type K6Summary struct {
-	Scenario string  `json:"scenario"`
-	TotalReqs int    `json:"total_reqs"`
-	AvgDuration float64 `json:"avg_duration"`
-	P95Duration float64 `json:"p95_duration"`
-	P99Duration float64 `json:"p99_duration"`
-	MinDuration float64 `json:"min_duration"`
-	MaxDuration float64 `json:"max_duration"`
-	ErrorRate   float64 `json:"error_rate"`
-	Throughput  float64 `json:"throughput"`
-	ChecksPass  int     `json:"checks_pass"`
-	ChecksFail  int     `json:"checks_fail"`
-	DataSent    float64 `json:"data_sent"`
+	Scenario     string  `json:"scenario"`
+	TotalReqs    int     `json:"total_reqs"`
+	AvgDuration  float64 `json:"avg_duration"`
+	P95Duration  float64 `json:"p95_duration"`
+	P99Duration  float64 `json:"p99_duration"`
+	MinDuration  float64 `json:"min_duration"`
+	MaxDuration  float64 `json:"max_duration"`
+	ErrorRate    float64 `json:"error_rate"`
+	Throughput   float64 `json:"throughput"`
+	ChecksPass   int     `json:"checks_pass"`
+	ChecksFail   int     `json:"checks_fail"`
+	DataSent     float64 `json:"data_sent"`
 	DataReceived float64 `json:"data_received"`
-	MaxVUs      int     `json:"max_vus"`
-	Duration    float64 `json:"duration"`
+	MaxVUs       int     `json:"max_vus"`
+	Duration     float64 `json:"duration"`
 }
 
 var (
@@ -247,12 +272,12 @@ func GetK6Dashboard(c *gin.Context) {
 		}
 
 		scenarioData := gin.H{
-			"timestamps":  timestamps,
-			"p95_series":  p95Series,
-			"avg_series":  avgSeries,
+			"timestamps":   timestamps,
+			"p95_series":   p95Series,
+			"avg_series":   avgSeries,
 			"error_series": errorSeries,
-			"rps_series":  rpsPoints,
-			"vus_series":  vusPoints,
+			"rps_series":   rpsPoints,
+			"vus_series":   vusPoints,
 			"stats": gin.H{
 				"total_requests": totalCount,
 				"error_count":    errorCount,

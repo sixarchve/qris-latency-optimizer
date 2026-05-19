@@ -1,7 +1,7 @@
-package database
+package postgres
 
 import (
-	"qris-latency-optimizer/models"
+	"qris-latency-optimizer/domain/entity"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -21,8 +21,8 @@ func ConnectDB() {
 		panic(err)
 	}
 
-	var c models.Merchant
-	var d models.Transaction
+	var c entity.Merchant
+	var d entity.Transaction
 
 	if err := DB.AutoMigrate(&c, &d); err != nil {
 		panic(err)
@@ -32,7 +32,7 @@ func ConnectDB() {
 }
 
 func seedMerchants() {
-	merchants := []models.Merchant{
+	merchants := []entity.Merchant{
 		{QRID: "TEST001", MerchantName: "Kantin FILKOM UB", IsActive: true},
 		{QRID: "TEST002", MerchantName: "TESTING STORE", IsActive: true},
 	}

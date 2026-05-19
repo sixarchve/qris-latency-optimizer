@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"qris-latency-optimizer/models"
-	"qris-latency-optimizer/repository/database"
+	"qris-latency-optimizer/domain/entity"
+	"qris-latency-optimizer/repository/postgres"
 )
 
 func merchantCacheKey(qrID string) string {
@@ -24,8 +24,8 @@ func PrefetchMerchant(qrID string) {
 		return
 	}
 
-	var merchant models.Merchant
-	if err := database.DB.Where("qr_id = ? AND is_active = ?", qrID, true).First(&merchant).Error; err != nil {
+	var merchant entity.Merchant
+	if err := postgres.DB.Where("qr_id = ? AND is_active = ?", qrID, true).First(&merchant).Error; err != nil {
 		return
 	}
 
@@ -43,8 +43,8 @@ func PrefetchRelatedMerchants(currentQRID string) {
 		return
 	}
 
-	var merchants []models.Merchant
-	if err := database.DB.
+	var merchants []entity.Merchant
+	if err := postgres.DB.
 		Where("is_active = ? AND qr_id != ?", true, currentQRID).
 		Limit(5).
 		Find(&merchants).Error; err != nil {
@@ -73,8 +73,8 @@ func WarmUpCache() {
 		return
 	}
 
-	var merchants []models.Merchant
-	if err := database.DB.Where("is_active = ?", true).Find(&merchants).Error; err != nil {
+	var merchants []entity.Merchant
+	if err := postgres.DB.Where("is_active = ?", true).Find(&merchants).Error; err != nil {
 		return
 	}
 
@@ -88,7 +88,7 @@ func WarmUpCache() {
 	}
 }
 
-func GetMerchant(qrID string) (*models.Merchant, bool) {
+func GetMerchant(qrID string) (*entity.Merchant, bool) {
 	if !RedisAvailable || qrID == "" {
 		return nil, false
 	}
@@ -98,7 +98,7 @@ func GetMerchant(qrID string) (*models.Merchant, bool) {
 		return nil, false
 	}
 
-	var merchant models.Merchant
+	var merchant entity.Merchant
 	if err := json.Unmarshal([]byte(cachedData), &merchant); err != nil {
 		_ = Delete(merchantCacheKey(qrID))
 		return nil, false
@@ -107,7 +107,7 @@ func GetMerchant(qrID string) (*models.Merchant, bool) {
 	return &merchant, true
 }
 
-func CacheMerchant(merchant models.Merchant) {
+func CacheMerchant(merchant entity.Merchant) {
 	if !RedisAvailable || merchant.QRID == "" {
 		return
 	}

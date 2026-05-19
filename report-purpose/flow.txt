@@ -1,15 +1,18 @@
 QRIS Latency Optimizer Flow
 ===========================
 
-1. Merchant Data
-----------------
+1. Merchant Data & Startup Flow
+-------------------------------
 - Backend starts from backend/cmd/main.go.
 - Backend loads backend/.env.
 - Backend connects to Postgres.
 - Backend runs GORM AutoMigrate for merchants and transactions.
-- Backend seeds default merchants in repository/database/connectdb.go.
+- Backend seeds default merchants.
 - Backend connects to Redis.
 - Backend warms merchant cache in Redis with all active merchants.
+- Backend connects to RabbitMQ.
+- Backend starts background Payment Consumer worker.
+- Backend starts HTTP server and latency trackers.
 
 
 2. Merchant List Flow
@@ -110,21 +113,31 @@ Flow:
 
 6. Confirm Payment Flow
 -----------------------
-Endpoint:
+Endpoint (Optimized - Asynchronous):
 POST /api/transactions/:id/confirm
 
-Flow:
+Flow (Optimized):
 - Customer app confirms payment.
 - Backend validates transaction ID is UUID.
-- Backend updates transaction status in Postgres to SUCCESS.
-- Backend checks rows affected.
-- If no row was updated, backend returns transaction not found.
-- Backend deletes Redis cache key:
-  - transaction:<transaction_id>
-- Backend reads updated transaction from Postgres.
-- Backend returns updated transaction data.
+- Backend creates a JSON event with `transaction_id`.
+- Backend publishes event to RabbitMQ `payment_confirmations` queue.
+- Backend immediately returns PROCESSING status to frontend.
+- Background Worker consumes event from RabbitMQ.
+- Background Worker updates transaction status to SUCCESS in Postgres.
+- Background Worker deletes transaction cache in Redis.
 - Next status request reads Postgres first, then caches SUCCESS transaction again.
 - Later status requests return SUCCESS from Redis cache.
+
+Endpoint (Baseline - Synchronous):
+POST /api/transactions/:id/confirm-sync
+
+Flow (Synchronous):
+- Customer app confirms payment.
+- Backend validates transaction ID is UUID.
+- Backend updates transaction status in Postgres to SUCCESS synchronously.
+- Backend deletes Redis cache key.
+- Backend reads updated transaction from Postgres.
+- Backend returns updated transaction data.
 
 
 7. Redis Purpose
@@ -169,9 +182,32 @@ QRID:
 
 9. Main Routes
 --------------
-GET  /api/ping
-GET  /api/merchants
-GET  /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
-POST /api/transactions/scan
-GET  /api/transactions/:id
-POST /api/transactions/:id/confirm
+Payment/Transaction Endpoints:
+GET    /api/ping
+GET    /api/merchants
+GET    /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
+POST   /api/transactions/scan
+GET    /api/transactions/:id
+POST   /api/transactions/:id/confirm         (Optimized, Asynchronous)
+POST   /api/transactions/:id/confirm-sync    (Baseline, Synchronous)
+
+Monitoring & Dashboard Endpoints:
+GET    /monitor                  (Real-time metrics & load test view)
+GET    /latency                  (Live endpoint latency graphs)
+GET    /api/monitor/system       (CPU, Memory, Goroutines, Service status)
+GET    /api/monitor/live         (Latency histograms, average, p95)
+POST   /api/monitor/k6/data      (K6 load test metrics ingestion)
+POST   /api/monitor/k6/summary   (K6 test summary receiver)
+GET    /api/monitor/k6           (K6 dashboard API)
+DELETE /api/monitor/k6           (Clear K6 data)
+
+
+10. RabbitMQ Purpose
+--------------------
+RabbitMQ is used as a high-performance message broker for asynchronous processing.
+
+Payment Confirmations Queue:
+- Takes heavy database update tasks off the main HTTP request thread.
+- Ensures immediate response to frontend (returns PROCESSING status).
+- Provides load buffering; database writes happen sequentially in the background worker without blocking web requests.
+- Results in drastically improved P95 latency and higher throughput during peak load.

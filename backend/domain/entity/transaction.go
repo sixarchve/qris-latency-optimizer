@@ -1,4 +1,4 @@
-package models
+package entity
 
 import (
 	"time"
@@ -7,23 +7,23 @@ import (
 )
 
 type Transaction struct {
-    ID         uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
-    MerchantID uuid.UUID `gorm:"column:merchant_id;type:uuid;index"`
-    Amount     float64   `gorm:"type:decimal(15,2);not null"`
-    Status     string    `gorm:"type:varchar(20);default:'PENDING'"`
-    CreatedAt  time.Time `gorm:"autoCreateTime"`
+	ID         uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
+	MerchantID uuid.UUID `gorm:"column:merchant_id;type:uuid;index"`
+	Amount     float64   `gorm:"type:decimal(15,2);not null"`
+	Status     string    `gorm:"type:varchar(20);default:'PENDING'"`
+	CreatedAt  time.Time `gorm:"autoCreateTime"`
 
-    Merchant   Merchant  `gorm:"foreignKey:MerchantID"`
+	Merchant Merchant `gorm:"foreignKey:MerchantID"`
 }
 
-// ScanQRRequest - payload dari client saat scan QR
+// request entity model saat scan QR
 type ScanQRRequest struct {
 	QRPayload  string  `json:"qr_payload" binding:"required"`
 	MerchantID string  `json:"merchant_id" binding:"required"`
 	Amount     float64 `json:"amount" binding:"required,gt=0"`
 }
 
-// TransactionResponse - response untuk client
+// response entity GetTransactionStatus
 type TransactionResponse struct {
 	TransactionID string    `json:"transaction_id"`
 	MerchantID    string    `json:"merchant_id"`

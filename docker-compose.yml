@@ -1,5 +1,62 @@
 services:
-  # Database PostgreSQL untuk penyimpanan permanen transaksi
+  golang:
+    image: golang:1.26-alpine
+    container_name: qris_golang
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend:/app/backend
+    working_dir: /app/backend
+    command: go run cmd/main.go
+    environment:
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: db
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT}
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      INFLUXDB_DB: ${INFLUXDB_DB}
+      GF_AUTH_ANONYMOUS_ENABLED: ${GF_AUTH_ANONYMOUS_ENABLED}
+      GF_AUTH_ANONYMOUS_ORG_ROLE: ${GF_AUTH_ANONYMOUS_ORG_ROLE}
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+      - influxdb
+      - grafana
+    
+  frontend:
+    image: node:20-alpine
+    container_name: qris_web
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app/frontend
+    working_dir: /app/frontend
+    command: sh -c "npm install && npm run dev -- --host"
+    depends_on:
+      - golang
+
+  customer_app:
+    image: node:20-alpine
+    container_name: qris_customer_app
+    ports:
+      - "5174:5174"
+    volumes:
+      - ./customer-app:/app/customer-app
+    working_dir: /app/customer-app
+    command: sh -c "npm install && npm run dev -- --host"
+    depends_on:
+      - golang
+  
   db:
     image: postgres:15-alpine
     container_name: qris_postgres
@@ -12,7 +69,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  # Redis untuk Caching Layer (Kunci optimasi latency p95)
   redis:
     image: redis:7-alpine
     container_name: qris_redis
@@ -29,13 +85,12 @@ services:
     volumes:
       - redisinsight_data:/data
 
-  # RabbitMQ untuk Message Broker (Proses Asynchronous)
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: qris_rabbitmq
     ports:
-      - "5672:5672" # Port data
-      - "15672:15672" # Port Dashboard (bisa dibuka di browser)
+      - "5672:5672"
+      - "15672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
@@ -52,9 +107,6 @@ services:
     depends_on:
       - db
 
-  # --- MONITORING STACK ---
-
-  # InfluxDB untuk menyimpan metrik hasil Load Test k6
   influxdb:
     image: influxdb:1.8-alpine
     container_name: qris_influxdb
@@ -65,7 +117,6 @@ services:
     volumes:
       - influxdb_data:/var/lib/influxdb
 
-  # Grafana untuk visualisasi grafik real-time
   grafana:
     image: grafana/grafana-oss
     container_name: qris_grafana

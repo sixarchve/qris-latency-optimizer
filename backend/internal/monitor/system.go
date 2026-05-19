@@ -1,4 +1,4 @@
-package service
+package monitor
 
 import (
 	"bufio"
@@ -162,10 +162,10 @@ func GetSystemMonitor(c *gin.Context) {
 	// Memory info
 	memTotal, memUsed, memFree, memPercent, memErr := readMemInfo()
 	memInfo := gin.H{
-		"total_mb":      memTotal,
-		"used_mb":       memUsed,
-		"free_mb":       memFree,
-		"used_percent":  fmt.Sprintf("%.2f", memPercent),
+		"total_mb":     memTotal,
+		"used_mb":      memUsed,
+		"free_mb":      memFree,
+		"used_percent": fmt.Sprintf("%.2f", memPercent),
 	}
 	if memErr != nil {
 		memInfo["error"] = memErr.Error()

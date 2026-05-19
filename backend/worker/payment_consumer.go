@@ -6,14 +6,12 @@ import (
 	"log"
 	"time"
 
-	"qris-latency-optimizer/models"
-	"qris-latency-optimizer/repository/database"
 	"qris-latency-optimizer/repository/rabbitmq"
-	"qris-latency-optimizer/repository/redis"
+	"qris-latency-optimizer/usecase"
 )
 
 // StartPaymentConsumer runs a background goroutine to process async payment confirmations
-func StartPaymentConsumer() {
+func StartPaymentConsumer(txUsecase usecase.TransactionUsecase) {
 	msgs, err := rabbitmq.Channel.Consume(
 		rabbitmq.Queue.Name, // queue
 		"",                  // consumer
@@ -23,6 +21,7 @@ func StartPaymentConsumer() {
 		false,               // no-wait
 		nil,                 // args
 	)
+
 	if err != nil {
 		log.Fatalf("Failed to register RabbitMQ consumer: %v", err)
 	}
@@ -43,22 +42,17 @@ func StartPaymentConsumer() {
 				continue
 			}
 
-			// 1. Update status to SUCCESS in PostgreSQL
-			if err := database.DB.Model(&models.Transaction{}).
-				Where("id = ?", transactionID).
-				Update("status", "SUCCESS").Error; err != nil {
+			// We re-use the Sync method because it updates DB and invalidates cache
+			_, err := txUsecase.ConfirmPaymentSync(transactionID)
+			if err != nil {
 				log.Printf("[Worker] Failed to update transaction %s: %v", transactionID, err)
 				continue
 			}
 
-			// 2. Invalidate Redis cache so the next poll fetches fresh SUCCESS status
-			cacheKey := fmt.Sprintf("transaction:%s", transactionID)
-			redis.Delete(cacheKey)
-
 			elapsed := time.Since(processStart)
-			log.Printf("[Worker] ✓ Confirmed payment %s in %v", transactionID, elapsed)
+			log.Printf("[Worker] Confirmed payment %s in %v", transactionID, elapsed)
 		}
 	}()
 
-	fmt.Println("✓ RabbitMQ Worker is running and waiting for messages...")
+	fmt.Println("RabbitMQ Worker is running and waiting for messages...")
 }

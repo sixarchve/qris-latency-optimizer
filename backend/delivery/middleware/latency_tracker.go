@@ -1,8 +1,10 @@
-package service
+package middleware
 
 import (
 	"sync"
 	"time"
+
+	"qris-latency-optimizer/internal/monitor"
 
 	"github.com/gin-gonic/gin"
 )
@@ -109,23 +111,7 @@ func LatencyTracker() gin.HandlerFunc {
 			if endpoint == "confirm-sync" {
 				scenario = "Synchronous_DB"
 			}
-			k6StoreLock.Lock()
-			k6Store[scenario] = append(k6Store[scenario], K6DataPoint{
-				Timestamp: event.Timestamp,
-				Scenario:  scenario,
-				Metric:    "http_req_duration",
-				Value:     event.LatencyMs,
-				Status:    event.StatusCode,
-				Error:     event.StatusCode >= 400,
-			})
-			if _, exists := k6Runs[scenario]; !exists {
-				k6Runs[scenario] = &K6TestRun{
-					Scenario:  scenario,
-					StartedAt: event.Timestamp,
-					IsActive:  true,
-				}
-			}
-			k6StoreLock.Unlock()
+			monitor.RecordLatencyEvent(scenario, event.Timestamp, event.LatencyMs, event.StatusCode)
 		}
 	}
 }

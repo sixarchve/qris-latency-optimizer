@@ -1,7 +1,7 @@
-package handler
+package middleware
 
 import (
-	"os"
+	"qris-latency-optimizer/config"
 	"strings"
 	"time"
 
@@ -10,9 +10,9 @@ import (
 )
 
 func allowedOrigins() []string {
-	origins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	origins := config.App.CORSAllowedOrigins
 	if origins == "" {
-		return []string{"http://localhost:5173", "http://127.0.0.1:5173"}
+		origins = "http://localhost:5173,http://127.0.0.1:5173"
 	}
 
 	allowed := []string{}
@@ -26,27 +26,27 @@ func allowedOrigins() []string {
 	return allowed
 }
 
+func isAllowedOrigin(origin string, allowedList []string) bool {
+	for _, allowed := range allowedList {
+		if origin == allowed {
+			return true
+		}
+	}
+	if strings.HasSuffix(origin, ":5173") || strings.HasSuffix(origin, ":5174") {
+		return true
+	}
+	if strings.HasSuffix(origin, ":8080") {
+		return true
+	}
+	return false
+}
+
 func CorsHandler(r *gin.Engine) {
 	allowedList := allowedOrigins()
 
 	r.Use(cors.New(cors.Config{
 		AllowOriginFunc: func(origin string) bool {
-			// Always allow listed origins from env
-			for _, allowed := range allowedList {
-				if origin == allowed {
-					return true
-				}
-			}
-			// Dynamically allow any origin on frontend ports (5173, 5174)
-			// This enables LAN access from any IP (e.g. 192.168.x.x:5174)
-			if strings.HasSuffix(origin, ":5173") || strings.HasSuffix(origin, ":5174") {
-				return true
-			}
-			// Also allow the monitoring dashboard served from backend port
-			if strings.HasSuffix(origin, ":8080") {
-				return true
-			}
-			return false
+			return isAllowedOrigin(origin, allowedList)
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
