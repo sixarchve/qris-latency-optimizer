@@ -15,7 +15,7 @@ var (
 	Conn    *amqp.Connection
 	Channel *amqp.Channel
 	Queue   amqp.Queue
-	// ✨ TAMBAHKAN: Queue untuk merchant notifications
+	// Queue untuk merchant notifications
 	NotificationQueue amqp.Queue
 )
 
@@ -23,7 +23,7 @@ var (
 func getRabbitMQURL() string {
 	url := os.Getenv("RABBITMQ_URL")
 	if url == "" {
-		url = "amqp://guest:guest@localhost:5672/"
+		url = "amqp://guest:guest@rabbitmq:5672/"
 	}
 	return url
 }
@@ -58,25 +58,25 @@ func ConnectRabbitMQ() {
 
 	// Declare the existing queue (payment_confirmations)
 	Queue, err = Channel.QueueDeclare(
-		"payment_confirmations", // queue name
-		true,                    // durable (survives server restart)
-		false,                   // delete when unused
-		false,                   // exclusive
-		false,                   // no-wait
-		nil,                     // arguments
+		"payment_confirmations",
+		true,
+		false,
+		false,
+		false,
+		nil,
 	)
 	if err != nil {
 		log.Fatalf("Failed to declare queue: %v", err)
 	}
 
-	// ✨ TAMBAHKAN: Declare queue untuk merchant notifications
+	// Declare queue untuk merchant notifications
 	NotificationQueue, err = Channel.QueueDeclare(
-		"merchant_notifications", // queue name
-		true,                      // durable
-		false,                     // delete when unused
-		false,                     // exclusive
-		false,                     // no-wait
-		nil,                       // arguments
+		"merchant_notifications",
+		true,
+		false,
+		false,
+		false,
+		nil,
 	)
 	if err != nil {
 		log.Fatalf("Failed to declare notification queue: %v", err)
@@ -91,10 +91,10 @@ func PublishMessage(body string) error {
 	defer cancel()
 
 	err := Channel.PublishWithContext(ctx,
-		"",         // exchange
-		Queue.Name, // routing key (queue name)
-		false,      // mandatory
-		false,      // immediate
+		"",
+		Queue.Name,
+		false,
+		false,
 		amqp.Publishing{
 			ContentType: "application/json",
 			Body:        []byte(body),
@@ -102,7 +102,7 @@ func PublishMessage(body string) error {
 	return err
 }
 
-// ✨ TAMBAHKAN: Publish merchant notification
+// NotificationPayload - struktur data untuk merchant notifications
 type NotificationPayload struct {
 	TransactionID string    `json:"transaction_id"`
 	MerchantID    string    `json:"merchant_id"`
@@ -112,6 +112,7 @@ type NotificationPayload struct {
 	Timestamp     time.Time `json:"timestamp"`
 }
 
+// PublishNotification - publish merchant notification ke queue
 func PublishNotification(txID, merchantID, merchantName string, amount float64) error {
 	if !IsConnected() {
 		return fmt.Errorf("RabbitMQ not connected")
@@ -122,7 +123,7 @@ func PublishNotification(txID, merchantID, merchantName string, amount float64) 
 		MerchantID:    merchantID,
 		MerchantName:  merchantName,
 		Amount:        amount,
-		Status:        "PENDING",
+		Status:        "SUCCESS",
 		Timestamp:     time.Now(),
 	}
 
@@ -135,10 +136,10 @@ func PublishNotification(txID, merchantID, merchantName string, amount float64) 
 	defer cancel()
 
 	err = Channel.PublishWithContext(ctx,
-		"",                        // exchange
-		NotificationQueue.Name,    // routing key (notification queue)
-		false,                     // mandatory
-		false,                     // immediate
+		"",
+		NotificationQueue.Name,
+		false,
+		false,
 		amqp.Publishing{
 			ContentType: "application/json",
 			Body:        body,
@@ -164,7 +165,7 @@ func IsConnected() bool {
 	return true
 }
 
-// ✨ TAMBAHKAN: Get notification queue untuk consumer
+// GetNotificationQueue returns the notification queue
 func GetNotificationQueue() amqp.Queue {
 	return NotificationQueue
 }
@@ -177,4 +178,5 @@ func Close() {
 	if Conn != nil {
 		Conn.Close()
 	}
+	log.Println("✓ RabbitMQ closed")
 }

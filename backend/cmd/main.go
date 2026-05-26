@@ -11,55 +11,65 @@ import (
 	"time"
 
 	"qris-latency-optimizer/delivery/handler"
+	"qris-latency-optimizer/internal/websocket"
 	"qris-latency-optimizer/repository/database"
 	"qris-latency-optimizer/repository/rabbitmq"
 	"qris-latency-optimizer/repository/redis"
 	"qris-latency-optimizer/usecase/service"
 	"qris-latency-optimizer/worker"
-	"qris-latency-optimizer/internal/websocket" // TAMBAHKAN
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	// --- Startup Sequence ---
 	fmt.Println("=== QRIS Latency Optimizer Starting ===")
 
 	// 1. Load environment
 	database.LoadEnv()
 
-	// 2. Connect to PostgreSQL + auto-migrate + seed
+	// 2. Initialize WebSocket config (OPTIMIZED)
+	websocket.InitWSConfig()
+
+	// 3. Connect to PostgreSQL
 	database.ConnectDB()
 	fmt.Println("✓ PostgreSQL connected & migrated")
 
-	// 3. Connect to Redis + warm cache
+	// 4. Connect to Redis
 	redis.ConnectRedis()
 	redis.WarmUpCache()
+	fmt.Println("✓ Redis connected & cache warmed")
 
-	// 4. Connect to RabbitMQ
+	// 5. Connect to RabbitMQ
 	rabbitmq.ConnectRabbitMQ()
 	defer rabbitmq.Close()
 
-	// 5. Initialize WebSocket Hub
+	// 6. Initialize WebSocket Hub
 	wsHub := websocket.NewHub()
-	go wsHub.Run() // Run hub dalam goroutine
+	go wsHub.Run()
 	fmt.Println("✓ WebSocket Hub initialized")
 
-	// 6. Start the RabbitMQ consumer worker (processes async notifications)
+	// 7. Set WebSocket hub reference
+	worker.SetWSHub(wsHub)
+
+	// 8. Start consumer worker
 	worker.StartPaymentConsumer()
+	fmt.Println("✓ Consumer worker started")
 
 	// --- HTTP Server ---
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		SkipPaths: []string{"/ws", "/api/ping"},
+	}))
+	r.Use(gin.Recovery())
 	handler.CorsHandler(r)
-	r.Use(service.LatencyTracker()) // Track latency for all API requests
-	handler.Rest(r, wsHub) // DIUBAH: pass wsHub ke handler
+	r.Use(service.LatencyTracker())
+	handler.Rest(r, wsHub)
 
 	srv := &http.Server{
 		Addr:    ":8080",
 		Handler: r,
 	}
 
-	// Start server in a goroutine
 	go func() {
 		fmt.Println("=== Server running on :8080 ===")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -67,7 +77,7 @@ func main() {
 		}
 	}()
 
-	// --- Graceful Shutdown ---
+	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
