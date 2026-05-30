@@ -45,6 +45,7 @@ func main() {
 		QRIS:        handler.NewQRISHandler(qrisUsecase),
 		Transaction: handler.NewTransactionHandler(txUsecase),
 		Ping:        handler.NewPingHandler(),
+		Telemetry:   handler.NewTelemetryHandler(),
 	}
 
 	// Start the RabbitMQ consumer worker

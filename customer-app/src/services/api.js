@@ -1,7 +1,8 @@
 import axios from 'axios';
 
 const currentHostname = window.location.hostname;
-const API_BASE_URL = `http://${currentHostname}:8080/api`;
+const API_PORT = import.meta.env.VITE_API_PORT || '8080';
+const API_BASE_URL = `http://${currentHostname}:${API_PORT}/api`;
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -9,6 +10,44 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+api.interceptors.request.use((config) => {
+  if (!config.url.endsWith('/telemetry')) {
+    config.metadata = { startTime: Date.now() };
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => {
+    if (response.config.metadata && response.config.metadata.startTime) {
+      const duration = Date.now() - response.config.metadata.startTime;
+      let path = response.config.url;
+      const method = response.config.method.toUpperCase();
+      
+      // Simplify path for Prometheus labels
+      if (path.startsWith('/')) {
+        path = '/api' + path;
+      } else {
+        path = '/api/' + path;
+      }
+
+      fetch(`${API_BASE_URL}/telemetry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path,
+          method,
+          client_duration_ms: duration,
+        }),
+      }).catch(() => {});
+    }
+    return response;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
 
 // BARU: Extract merchant ID dari QRIS payload
 export const extractMerchantFromQRIS = (payload) => {

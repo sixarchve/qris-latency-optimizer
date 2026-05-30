@@ -7,6 +7,9 @@ Full-stack QRIS payment simulation with:
 - Postgres for source of truth
 - Redis for cache and prefetch
 - RabbitMQ for async payment processing
+- Prometheus + Grafana for monitoring
+- Toxiproxy for rural network simulation
+- K6 for load testing
 
 ## Project Structure
 
@@ -33,6 +36,10 @@ Full-stack QRIS payment simulation with:
 - RedisInsight
 - RabbitMQ
 - pgAdmin
+- Prometheus
+- Grafana
+- Toxiproxy
+- K6
 
 ## Current Architecture Notes
 
@@ -70,6 +77,9 @@ This starts:
 - RedisInsight
 - pgAdmin
 - RabbitMQ
+- Prometheus
+- Grafana
+- Toxiproxy
 
 ## 2. Backend Setup
 
@@ -85,6 +95,8 @@ Backend runs on:
 ```text
 http://localhost:8080
 ```
+
+*Note: CORS is configured to allow dynamic development origins under ports `:5173` and `:5174` via `CORS_ALLOWED_ORIGINS`.*
 
 ## 3. Merchant Dashboard
 
@@ -154,8 +166,8 @@ Default credentials: `guest` / `guest`
 ### Startup
 
 Backend startup does:
-- load `backend/.env`
-- connect Postgres
+- load `.env` from repo root
+- connect Postgres (timezone: Asia/Jakarta)
 - create `pgcrypto` extension if needed
 - auto-migrate tables
 - seed default merchants
@@ -163,7 +175,7 @@ Backend startup does:
 - warm merchant cache
 - connect RabbitMQ
 - start payment consumer worker
-- start HTTP server
+- start HTTP server with graceful shutdown (SIGINT/SIGTERM)
 
 ### Merchant Flow
 
@@ -186,7 +198,7 @@ GET /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
 Flow:
 - validate amount
 - load merchant by UUID
-- generate QRIS payload from merchant QRID, merchant name, and amount
+- generate QRIS payload from merchant QRID, merchant name, and amount (default city: MALANG)
 - cache merchant in Redis
 - prefetch related merchants
 
@@ -317,10 +329,12 @@ Merchant has two identifiers:
 GET  /api/ping
 GET  /api/merchants
 GET  /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
+GET  /metrics
 POST /api/transactions/scan
 GET  /api/transactions/:id
 POST /api/transactions/:id/confirm
 POST /api/transactions/:id/confirm-sync
+POST /api/telemetry
 ```
 
 ## Testing Quick Examples
@@ -348,6 +362,112 @@ curl -X POST http://localhost:8080/api/transactions/<transaction_id>/confirm-syn
 - `report-purpose/flow.txt`
 - `report-purpose/flow-mermaid.md`
 - `report-purpose/changelog.md`
+
+## Monitoring
+
+### Prometheus
+
+Prometheus scrapes the backend `/metrics` endpoint every 15 seconds.
+
+Open:
+
+```text
+http://localhost:9090
+```
+
+Check target status:
+
+```text
+http://localhost:9090/targets
+```
+
+### Grafana
+
+Pre-configured dashboard with:
+- Total HTTP Requests
+- Request Rate (per second)
+- 95th Percentile Latency
+- Go Goroutines
+- Heap Memory Usage
+- Client vs Server Latency (Rural Lag)
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+Default credentials: `admin` / `admin`
+
+### Client Telemetry
+
+The customer app automatically measures round-trip time for every API request and sends it to `POST /api/telemetry`. This data appears on the Grafana dashboard as `client_request_duration_seconds`, allowing comparison between server processing time and what the user actually experiences.
+
+## Load Testing (K6)
+
+K6 load test scripts are in the `k6/` directory.
+
+### Available Tests
+
+| Script | Description |
+|--------|-------------|
+| `qris_generation.js` | QRIS QR code generation under load |
+| `scan_async_payment.js` | Optimized payment flow (RabbitMQ) |
+| `scan_sync_payment.js` | Baseline payment flow (direct Postgres) |
+
+### Run Load Tests (Normal Network)
+
+```bash
+./k6/run.sh qris
+./k6/run.sh async
+./k6/run.sh sync
+```
+
+### Run Load Tests (Rural 3G Simulation)
+
+First configure the rural proxy:
+
+```bash
+./k6/rural_test_setup.sh
+```
+
+Then run tests through the proxy:
+
+```bash
+./k6/run_rural.sh qris
+./k6/run_rural.sh async
+./k6/run_rural.sh sync
+```
+
+## Rural Network Simulation (Toxiproxy)
+
+Toxiproxy intercepts traffic on port `8081` and adds:
+- 500ms latency ± 100ms jitter
+- ~400kbps bandwidth limit (simulating 3G)
+
+Compare normal vs rural:
+
+```bash
+curl http://localhost:8080/api/ping   # normal (~7ms)
+curl http://localhost:8081/api/ping   # rural (~500ms)
+```
+
+### Manual Rural Testing (Customer App)
+
+To manually test the customer app through the rural simulator:
+
+```bash
+cd customer-app
+npm run dev -- --mode rural --host
+```
+
+This routes all API traffic through Toxiproxy port `8081` instead of the direct backend port `8080`.
+
+Toxiproxy management API:
+
+```text
+http://localhost:8474
+```
 
 ## Notes For Phone Testing
 

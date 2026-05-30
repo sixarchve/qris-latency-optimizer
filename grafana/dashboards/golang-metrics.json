@@ -1,0 +1,97 @@
+{
+  "title": "Go Backend Metrics",
+  "uid": "golang-metrics",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total HTTP Requests",
+      "targets": [
+        {
+          "expr": "sum(http_requests_total)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Request Rate (per second)",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[1m])) by (method, path)",
+          "refId": "A",
+          "legendFormat": "{{method}} {{path}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "95th Percentile Latency",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[1m])) by (le, method, path))",
+          "refId": "A",
+          "legendFormat": "{{method}} {{path}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Go Goroutines",
+      "targets": [
+        {
+          "expr": "go_goroutines",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Go Heap Memory Usage",
+      "targets": [
+        {
+          "expr": "go_memstats_heap_alloc_bytes",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Client vs Server Latency (Rural Lag)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(client_request_duration_seconds_bucket[1m])) by (le, method, path))",
+          "refId": "A",
+          "legendFormat": "Client RTT: {{method}} {{path}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[1m])) by (le, method, path))",
+          "refId": "B",
+          "legendFormat": "Server Time: {{method}} {{path}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    }
+  ],
+  "schemaVersion": 38,
+  "timezone": "browser"
+}

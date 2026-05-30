@@ -11,6 +11,9 @@ Summary
 
 - `testarea` is 2 commits ahead of `upstream/main`.
 - Main branch work adds backend clean architecture refactor, RabbitMQ async payment confirmation, Redis cache hardening, and QRIS payload validation.
+- Added Prometheus + Grafana monitoring stack with client-side telemetry.
+- Added K6 load testing scripts for performance benchmarking.
+- Added Toxiproxy for rural 3G network simulation.
 
 Backend Architecture
 --------------------
@@ -183,6 +186,71 @@ Customer App / Frontend
   - `merchant_id`
   - `amount`
 
+2. Client-side telemetry
+- Added Axios request/response interceptors to customer app.
+- Interceptors measure total round-trip time for every API request.
+- Measured duration is sent to `POST /api/telemetry` in the background.
+- Telemetry requests are excluded from being measured themselves.
+
+3. Rural mode support
+- Added `VITE_API_PORT` environment variable to `customer-app/src/services/api.js`.
+- Default port is `8080` (direct backend).
+- Created `customer-app/.env.rural` with `VITE_API_PORT=8081` for Toxiproxy routing.
+- Customer app can be started in rural mode: `npm run dev -- --mode rural --host`.
+
+
+Monitoring
+----------
+
+1. Prometheus integration
+- Added `github.com/prometheus/client_golang` to Go backend.
+- Created Gin middleware `backend/delivery/middleware/prometheus.go`.
+- Middleware records `http_requests_total` (counter) and `http_request_duration_seconds` (histogram).
+- Added `GET /metrics` endpoint to router using `promhttp.Handler()`.
+- Added `prometheus` service to `docker-compose.yml` on port `9090`.
+- Created `prometheus.yml` config to scrape the Go backend every 15 seconds.
+
+2. Grafana integration
+- Added `grafana` service to `docker-compose.yml` on port `3000`.
+- Created provisioning config for automatic Prometheus datasource.
+- Created provisioning config for automatic dashboard loading.
+- Created pre-configured dashboard `grafana/dashboards/golang-metrics.json`.
+- Dashboard panels: Total Requests, Request Rate, P95 Latency, Goroutines, Heap Memory, Client vs Server Latency.
+
+3. Client-side telemetry endpoint
+- Created `backend/delivery/handler/telemetry_handler.go`.
+- Added `POST /api/telemetry` endpoint accepting `path`, `method`, and `client_duration_ms`.
+- Handler records data as `client_request_duration_seconds` Prometheus histogram.
+- Grafana dashboard compares `client_request_duration_seconds` vs `http_request_duration_seconds` to visualize rural network lag.
+
+
+Load Testing
+------------
+
+1. K6 load test scripts
+- Created `k6/qris_generation.js` for QRIS generation load testing.
+- Created `k6/scan_async_payment.js` for optimized async payment flow.
+- Created `k6/scan_sync_payment.js` for baseline sync payment flow.
+- Each test ramps to 20 virtual users over 50 seconds.
+- Tests auto-fetch merchant UUID and QRIS payload during setup phase.
+
+2. K6 execution scripts
+- Created `k6/run.sh` for normal network load tests.
+- Created `k6/run_rural.sh` for rural simulation load tests.
+- Scripts use ephemeral `grafana/k6` Docker containers.
+
+
+Rural Network Simulation
+------------------------
+
+1. Toxiproxy integration
+- Added `toxiproxy` service to `docker-compose.yml`.
+- Exposed port `8081` (proxy) and `8474` (management API).
+- Created `k6/rural_test_setup.sh` to configure rural proxy.
+- Proxy adds 500ms latency with 100ms jitter.
+- Proxy limits bandwidth to ~400kbps (simulating 3G).
+- Allows both automated K6 testing and manual browser testing through rural conditions.
+
 
 Docs
 ----
@@ -190,3 +258,9 @@ Docs
 1. Added flow documentation
 - `flow.txt`
 - `flow-mermaid.md`
+
+2. Updated documentation
+- Updated `flow.txt` with monitoring, K6, and Toxiproxy sections.
+- Updated `flow-mermaid.md` with monitoring and testing mermaid nodes.
+- Updated `changelog.md` with all new features.
+- Updated `README.md` with monitoring, load testing, and rural simulation sections.

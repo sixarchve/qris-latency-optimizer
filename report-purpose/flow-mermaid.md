@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart TD
-    A[Backend Start] --> B[Load backend/.env]
+    A[Backend Start] --> B[Load .env from repo root]
     B --> C[Connect Postgres]
     C --> D[AutoMigrate merchants and transactions]
     D --> E[Seed default merchants]
@@ -10,7 +10,7 @@ flowchart TD
     F --> G[Warm merchant cache]
     G --> G1[Connect RabbitMQ]
     G1 --> G2[Start payment consumer worker]
-    G2 --> G3[Start HTTP server]
+    G2 --> G3[Start HTTP server with graceful shutdown]
 
     H[Frontend Merchant Page] --> I[GET /api/merchants]
     I --> J[Query active merchants from Postgres]
@@ -54,6 +54,23 @@ flowchart TD
     AU --> AV[Return SUCCESS transaction]
 
     AW[Later Status Check] --> AE
+
+    BA[Prometheus Scraper] -->|Every 15s| BB[GET /metrics]
+    BB --> BC[Collect http_requests_total]
+    BB --> BD[Collect http_request_duration_seconds]
+    BB --> BE[Collect Go runtime metrics]
+
+    BF[Customer App Interceptor] --> BG[Measure request round-trip time]
+    BG --> BH[POST /api/telemetry]
+    BH --> BI[Record client_request_duration_seconds]
+
+    BJ[Grafana Dashboard] --> BA
+    BJ --> BI
+
+    CA[K6 Load Test] -->|Normal| CB[Port 8080 - Direct Backend]
+    CA -->|Rural| CC[Port 8081 - Through Toxiproxy]
+    CC --> CD[Toxiproxy adds 500ms latency + bandwidth limit]
+    CD --> CB
 ```
 
 ## Notes
@@ -64,3 +81,8 @@ flowchart TD
 - Merchant UUID is database primary key.
 - Optimized confirm returns `PROCESSING` and finishes through RabbitMQ worker.
 - Baseline confirm-sync writes to Postgres before responding.
+- Prometheus collects server-side metrics via `/metrics` endpoint.
+- Client telemetry measures actual user-perceived latency via Axios interceptors.
+- Grafana dashboard compares server latency vs client RTT to visualize rural network lag.
+- Toxiproxy simulates rural 3G conditions (500ms latency, ~400kbps bandwidth).
+- K6 runs load tests against both normal and rural-simulated endpoints.

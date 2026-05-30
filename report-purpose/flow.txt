@@ -4,15 +4,15 @@ QRIS Latency Optimizer Flow
 1. Merchant Data & Startup Flow
 -------------------------------
 - Backend starts from backend/cmd/main.go.
-- Backend loads backend/.env.
-- Backend connects to Postgres.
+- Backend loads .env from repo root.
+- Backend connects to Postgres (timezone: Asia/Jakarta).
 - Backend runs GORM AutoMigrate for merchants and transactions.
 - Backend seeds default merchants.
 - Backend connects to Redis.
 - Backend warms merchant cache in Redis with all active merchants.
 - Backend connects to RabbitMQ.
 - Backend starts background Payment Consumer worker.
-- Backend starts HTTP server.
+- Backend starts HTTP server with graceful shutdown (SIGINT/SIGTERM).
 
 
 2. Merchant List Flow
@@ -185,10 +185,12 @@ QRID:
 GET    /api/ping
 GET    /api/merchants
 GET    /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
+GET    /metrics
 POST   /api/transactions/scan
 GET    /api/transactions/:id
 POST   /api/transactions/:id/confirm         (Optimized, Asynchronous)
 POST   /api/transactions/:id/confirm-sync    (Baseline, Synchronous)
+POST   /api/telemetry
 
 
 10. RabbitMQ Purpose
@@ -200,3 +202,81 @@ Payment Confirmations Queue:
 - Ensures immediate response to frontend (returns PROCESSING status).
 - Provides load buffering; database writes happen sequentially in the background worker without blocking web requests.
 - Results in improved P95 latency and higher throughput during peak load.
+
+
+11. Monitoring (Prometheus + Grafana)
+-------------------------------------
+Prometheus scrapes the backend /metrics endpoint every 15 seconds.
+
+Server-side metrics collected:
+- http_requests_total: counter of all HTTP requests by method, path, and status.
+- http_request_duration_seconds: histogram of request latency by method and path.
+- Go runtime metrics: goroutines, heap memory, GC stats.
+
+Client-side telemetry:
+- Customer app measures round-trip time for every API request using Axios interceptors.
+- Customer app sends measured duration to POST /api/telemetry.
+- Backend records this as client_request_duration_seconds in Prometheus.
+- Allows direct comparison between server processing time and actual user experience.
+
+Grafana dashboard panels:
+- Total HTTP Requests (stat)
+- Request Rate per second (timeseries)
+- 95th Percentile Latency (timeseries)
+- Go Goroutines (timeseries)
+- Heap Memory Usage (timeseries)
+- Client vs Server Latency / Rural Lag (timeseries)
+
+Access:
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (admin / admin)
+
+
+12. Load Testing (K6)
+---------------------
+K6 is used for load testing and performance benchmarking.
+
+Test scripts in k6/ directory:
+- qris_generation.js: QRIS QR code generation under load.
+- scan_async_payment.js: Optimized payment flow (Scan + RabbitMQ confirm).
+- scan_sync_payment.js: Baseline payment flow (Scan + direct Postgres confirm).
+
+Each test ramps up to 20 virtual users over 50 seconds.
+Tests verify HTTP status codes and response payloads.
+
+Run normal load test:
+  ./k6/run.sh qris
+  ./k6/run.sh async
+  ./k6/run.sh sync
+
+Run rural load test (through Toxiproxy):
+  ./k6/run_rural.sh qris
+  ./k6/run_rural.sh async
+  ./k6/run_rural.sh sync
+
+
+13. Rural Network Simulation (Toxiproxy)
+-----------------------------------------
+Toxiproxy simulates poor rural 3G network conditions.
+
+Setup:
+- Toxiproxy container listens on port 8081.
+- Proxies traffic to Go backend on port 8080.
+- Configured with rural_test_setup.sh.
+
+Simulated conditions:
+- 500ms latency with 100ms jitter.
+- ~400kbps bandwidth limit (simulating 3G).
+
+Manual testing with customer app:
+- Customer app supports .env.rural with VITE_API_PORT=8081.
+- Run: cd customer-app && npm run dev -- --mode rural --host
+- All API traffic routes through Toxiproxy.
+- User experiences artificial rural lag.
+- Telemetry data appears on Grafana dashboard.
+
+Compare:
+  curl http://localhost:8080/api/ping   # normal (~7ms)
+  curl http://localhost:8081/api/ping   # rural (~500ms)
+
+Toxiproxy management API: http://localhost:8474
