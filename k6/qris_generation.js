@@ -21,17 +21,25 @@ export function setup() {
   const body = JSON.parse(res.body);
 
   // The merchants endpoint returns an array of merchants
-  let merchants = body;
-  if (body.data) merchants = body.data;
+  let merchants = [];
+  if (body.merchants) {
+    merchants = body.merchants;
+  } else if (body.data) {
+    merchants = body.data;
+  } else if (Array.isArray(body)) {
+    merchants = body;
+  }
 
   if (!merchants || merchants.length === 0) {
     throw new Error('No merchants found. Is the backend seeded?');
   }
 
   const merchant = merchants[0];
-  console.log(`Using merchant: ${merchant.merchant_name} (${merchant.ID || merchant.id})`);
+  const merchantName = merchant.MerchantName || merchant.merchant_name || 'Unknown';
+  const merchantID = merchant.ID || merchant.id;
+  console.log(`Using merchant: ${merchantName} (${merchantID})`);
 
-  return { merchantID: merchant.ID || merchant.id };
+  return { merchantID: merchantID };
 }
 
 // ── Main test: Generate QRIS ───────────────────────────────

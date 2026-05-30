@@ -19,8 +19,16 @@ export const options = {
 export function setup() {
   const res = http.get(`${BASE_URL}/api/merchants`);
   const body = JSON.parse(res.body);
-  let merchants = body;
-  if (body.data) merchants = body.data;
+
+  // The merchants endpoint returns an array of merchants
+  let merchants = [];
+  if (body.merchants) {
+    merchants = body.merchants;
+  } else if (body.data) {
+    merchants = body.data;
+  } else if (Array.isArray(body)) {
+    merchants = body;
+  }
 
   if (!merchants || merchants.length === 0) {
     throw new Error('No merchants found.');
@@ -28,7 +36,8 @@ export function setup() {
 
   const merchant = merchants[0];
   const merchantID = merchant.ID || merchant.id;
-  console.log(`Using merchant: ${merchant.merchant_name} (${merchantID})`);
+  const merchantName = merchant.MerchantName || merchant.merchant_name || 'Unknown';
+  console.log(`Using merchant: ${merchantName} (${merchantID})`);
 
   // Generate a QRIS payload to use in scan requests
   const qrisRes = http.get(`${BASE_URL}/api/qris?merchant_id=${merchantID}&amount=10000`);
@@ -37,7 +46,7 @@ export function setup() {
   return {
     merchantID: merchantID,
     qrPayload: qrisBody.qris_payload,
-    merchantQRID: merchant.qr_id || 'TEST001',
+    merchantQRID: merchant.QRID || merchant.qr_id || 'TEST001',
   };
 }
 
