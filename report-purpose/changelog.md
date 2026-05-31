@@ -1,266 +1,237 @@
-Changelog
-=========
+Current Repository Report
+=========================
 
-Branch Comparison: `testarea` vs `upstream/main`
-================================================
-
-Compared against `upstream/main` at `f53d78e`.
-
-Summary
--------
-
-- `testarea` is 2 commits ahead of `upstream/main`.
-- Main branch work adds backend clean architecture refactor, RabbitMQ async payment confirmation, Redis cache hardening, and QRIS payload validation.
-- Added Prometheus + Grafana monitoring stack with client-side telemetry.
-- Added K6 load testing scripts for performance benchmarking.
-- Added Toxiproxy for rural 3G network simulation.
-
-Backend Architecture
---------------------
-
-1. Handler and routing refactor
-- Replaced the older combined REST setup with explicit handlers for merchants, QRIS, transactions, and ping.
-- Added a central router setup that registers route groups and middleware.
-- Moved CORS from handler package into middleware package.
-
-2. Domain and repository layering
-- Moved models into `domain/entity`.
-- Added repository interfaces under `domain/repository`.
-- Split Postgres implementation into merchant and transaction repositories.
-- Removed older database package files in favor of explicit config and repository startup.
-
-3. Configuration and startup
-- Added centralized config loading.
-- Moved `.env_example` from backend-local path to repo root.
-- Added root-level `docker-compose.yml` and removed backend-local compose file.
-- Backend startup now connects Postgres, Redis, warms Redis cache, connects RabbitMQ, starts payment consumer, and shuts down gracefully.
-
-Payment Flow
-------------
-
-1. QRIS and transaction validation
-- QRIS payload generation now uses merchant database data and request amount.
-- Added payload parsing, CRC validation, merchant QRID extraction, and amount validation.
-- Transaction scan accepts UUID or QRID merchant identifiers and validates merchant/activity before creating transaction.
-
-2. Optimized vs non-optimized confirmation
-- Added optimized `/api/transactions/:id/confirm` route that publishes confirmation work to RabbitMQ and returns quickly with `PROCESSING`.
-- Kept baseline `/api/transactions/:id/confirm-sync` route for synchronous DB confirmation.
-- Added RabbitMQ publisher and payment consumer worker for async transaction status updates.
-- Transaction cache is invalidated after status updates.
-
-Caching
--------
-
-1. Redis cache behavior
-- Redis connection is now explicit during startup instead of hidden package initialization.
-- Added merchant cache warm-up, QRID lookup, cache storage, and related merchant prefetch helpers.
-- Transaction status lookup checks Redis first, falls back to Postgres, and removes corrupted cache payloads.
-
-Tests and Docs
---------------
-
-1. Tests added
-- Added QRIS payload parser/validator tests.
-
-2. Documentation updated
-- Updated flow documentation for transaction behavior.
-- Updated README with repo-root Docker usage.
-
-Backend
--------
-
-1. QRIS payload generation
-- Replaced mostly static QR payload generation with input-based generation.
-- Payload now uses:
-  - merchant name from database
-  - merchant QRID from database
-  - amount from request
-- Added QRIS CRC generation.
-- Default city set to MALANG.
-- Added QR payload parsing and validation:
-  - parse merchant QRID from tag 26.01
-  - parse amount from tag 54
-  - validate CRC
-
-2. Merchant identifier cleanup
-- Clarified merchant identifiers:
-  - `ID` = UUID primary key
-  - `QRID` = merchant QR identifier, stored in `qr_id`
-- Renamed merchant field from confusing `QRIS` to `QRID`.
-
-3. Transaction scan flow hardening
-- Added validation for `merchant_id`.
-- Allowed `merchant_id` in scan request to be:
-  - UUID
-  - QRID like `TEST001`
-- Added merchant active/existence validation before transaction create.
-- Added QR payload validation in scan flow:
-  - merchant in QR must match selected merchant
-  - amount in QR must match request amount
-- Removed panic-prone `uuid.MustParse` usage in scan flow.
-
-4. Transaction status and confirm flow hardening
-- Transaction status now:
-  - checks Redis first
-  - falls back to Postgres
-  - deletes corrupted cached transaction payload
-- Confirm payment now:
-  - checks rows affected
-  - returns not found if transaction does not exist
-  - reloads updated transaction safely
-
-5. Redis changes
-- Redis startup changed from implicit package `init()` to explicit startup call.
-- Added merchant cache helpers:
-  - `WarmUpCache()`
-  - `PrefetchMerchant()`
-  - `PrefetchRelatedMerchants()`
-  - `GetMerchant()`
-  - `CacheMerchant()`
-- Warm-up of merchant cache now runs at backend startup.
-- Transaction cache uses shared TTL constant.
-- Merchant cache used in customer scan flow for QRID lookup.
-- Qris generation flow now caches merchant and triggers related merchant prefetch.
-
-6. Database bootstrap
-- Removed SQL init dependency from Docker startup.
-- Deleted old `backend/init-db/init.sql`.
-- Database creation now handled from Go:
-  - `pgcrypto` extension creation
-  - `AutoMigrate`
-  - default merchant seed
-- Added Go seed for:
-  - `TEST001` / `Kantin FILKOM UB`
-  - `TEST002` / `TESTING STORE`
-
-7. Handler/service organization
-- Merged server-side transaction status handler into `backend/usecase/service/qris.go`.
-- Deleted old separate `backend/usecase/service/transaction.go`.
-
-8. CORS
-- Replaced unsafe wildcard CORS setup.
-- Added env-based allowed origins using `CORS_ALLOWED_ORIGINS`.
-- Safer headers/method configuration.
-
-9. Environment and Compose
-- Repo layout shifted to backend-local setup:
-  - `backend/.env`
-  - `backend/.env_example`
-  - `backend/docker-compose.yml`
-- LoadEnv currently expects `.env` in backend working directory.
-- Compose now includes:
-  - Postgres
-  - Redis
-  - RedisInsight
-  - PgAdmin
-  - RabbitMQ
-
-10. Asynchronous payment confirmation with RabbitMQ
-- Integrated the `github.com/rabbitmq/amqp091-go` message broker package.
-- Added `backend/repository/rabbitmq/rabbitmq.go` to handle connections, channel establishment, retry logic (3 attempts with backoff), and publishing message payloads.
-- Implemented a background payment consumer worker (`backend/worker/payment_consumer.go`) that consumes from the `payment_confirmations` queue, asynchronously updates the transaction status to `SUCCESS` in PostgreSQL, and invalidates the cached transaction payload in Redis.
-- Updated payment confirmation endpoint routing:
-  - Split into optimized asynchronous `/api/transactions/:id/confirm` (publishes message to RabbitMQ queue, returning instantly).
-  - Maintained synchronous `/api/transactions/:id/confirm-sync` as a baseline reference.
-
-11. Graceful shutdown and improved startup sequence
-- Refactored `backend/cmd/main.go` to implement robust graceful shutdown handling using a signal listener (`SIGINT`, `SIGTERM`).
-- The server now closes its RabbitMQ channel/connection cleanly and allows active HTTP requests to complete within a 5-second graceful timeout.
-- Added clean connection/startup verification messages in terminal logs.
-
-12. CORS and configuration updates
-- Refactored CORS configuration in `backend/delivery/handler/cors.go` with dynamic allowed origins logic to support any development origin under ports `:5173` and `:5174` (allowing local LAN testing/IPs).
-- Added fallback default value for `RABBITMQ_URL` env variable in `backend/.env_example`.
-- Shifted default PostgreSQL timezone setting from `Asia/Shanghai` to `Asia/Jakarta` in `backend/repository/database/pg.go`.
+This document summarizes the current QRIS Latency Optimizer repository. It is
+not a branch diff; it is a concise report of the implemented system.
 
 
-Customer App / Frontend
------------------------
-
-1. Customer scan behavior
-- Customer app scans QR payload.
-- Customer app extracts merchant QRID and amount from scanned QR.
-- Customer app sends:
-  - `qr_payload`
-  - `merchant_id`
-  - `amount`
-
-2. Client-side telemetry
-- Added Axios request/response interceptors to customer app.
-- Interceptors measure total round-trip time for every API request.
-- Measured duration is sent to `POST /api/telemetry` in the background.
-- Telemetry requests are excluded from being measured themselves.
-
-3. Rural mode support
-- Added `VITE_API_PORT` environment variable to `customer-app/src/services/api.js`.
-- Default port is `8080` (direct backend).
-- Created `customer-app/.env.rural` with `VITE_API_PORT=8081` for Toxiproxy routing.
-- Customer app can be started in rural mode: `npm run dev -- --mode rural --host`.
-
-
-Monitoring
+1. Backend
 ----------
 
-1. Prometheus integration
-- Added `github.com/prometheus/client_golang` to Go backend.
-- Created Gin middleware `backend/delivery/middleware/prometheus.go`.
-- Middleware records `http_requests_total` (counter) and `http_request_duration_seconds` (histogram).
-- Added `GET /metrics` endpoint to router using `promhttp.Handler()`.
-- Added `prometheus` service to `docker-compose.yml` on port `9090`.
-- Created `prometheus.yml` config to scrape the Go backend every 15 seconds.
-
-2. Grafana integration
-- Added `grafana` service to `docker-compose.yml` on port `3000`.
-- Created provisioning config for automatic Prometheus datasource.
-- Created provisioning config for automatic dashboard loading.
-- Created pre-configured dashboard `grafana/dashboards/golang-metrics.json`.
-- Dashboard panels: Total Requests, Request Rate, P95 Latency, Goroutines, Heap Memory, Client vs Server Latency.
-
-3. Client-side telemetry endpoint
-- Created `backend/delivery/handler/telemetry_handler.go`.
-- Added `POST /api/telemetry` endpoint accepting `path`, `method`, and `client_duration_ms`.
-- Handler records data as `client_request_duration_seconds` Prometheus histogram.
-- Grafana dashboard compares `client_request_duration_seconds` vs `http_request_duration_seconds` to visualize rural network lag.
+- Backend entrypoint is backend/cmd/main.go.
+- API framework is Gin.
+- The code is organized into delivery handlers, middleware, usecases, domain
+  entities/interfaces, and repository implementations.
+- Startup sequence:
+  - load configuration
+  - connect PostgreSQL
+  - create pgcrypto extension
+  - run GORM AutoMigrate
+  - seed default merchants
+  - connect Redis
+  - warm Redis merchant cache
+  - connect RabbitMQ
+  - start payment consumer worker
+  - start HTTP server with graceful shutdown
+- Main route registration is in backend/delivery/handler/router.go.
 
 
-Load Testing
-------------
+2. Database
+-----------
 
-1. K6 load test scripts
-- Created `k6/qris_generation.js` for QRIS generation load testing.
-- Created `k6/scan_async_payment.js` for optimized async payment flow.
-- Created `k6/scan_sync_payment.js` for baseline sync payment flow.
-- Each test ramps to 20 virtual users over 50 seconds.
-- Tests auto-fetch merchant UUID and QRIS payload during setup phase.
-
-2. K6 execution scripts
-- Created `k6/run.sh` for normal network load tests.
-- Created `k6/run_rural.sh` for rural simulation load tests.
-- Scripts use ephemeral `grafana/k6` Docker containers.
+- PostgreSQL is the source of truth.
+- Tables are created through GORM AutoMigrate.
+- Default seeded merchants:
+  - TEST001 / Kantin FILKOM UB
+  - TEST002 / TESTING STORE
+- Merchant has two important identifiers:
+  - ID: UUID primary key
+  - QRID: QR merchant identifier stored in qr_id
+- Transaction status starts as PENDING and becomes SUCCESS after confirmation.
 
 
-Rural Network Simulation
+3. QRIS Payload
+---------------
+
+- QRIS payload code is in backend/internal/qris/payload.go.
+- Generation uses merchant database data and request amount.
+- Payload includes merchant QRID in tag 26.01.
+- Payload includes amount in tag 54.
+- Payload includes merchant name and city MALANG.
+- CRC is generated and validated.
+- Tests exist in backend/internal/qris/payload_test.go.
+
+
+4. Transaction Flow
+-------------------
+
+- Customer scan endpoint:
+  - POST /api/transactions/scan
+- Scan request includes:
+  - qr_payload
+  - merchant_id
+  - amount
+- merchant_id can be UUID or QRID.
+- Backend validates:
+  - merchant exists
+  - QR payload parses successfully
+  - QR CRC is valid
+  - QR merchant matches selected merchant
+  - QR amount matches submitted amount
+- Backend creates a PENDING transaction in PostgreSQL.
+- Backend caches the transaction in Redis.
+
+
+5. Optimized vs Baseline Confirmation
+-------------------------------------
+
+Optimized endpoint:
+- POST /api/transactions/:id/confirm
+- Validates transaction UUID.
+- Publishes transaction_id to RabbitMQ queue payment_confirmations.
+- Returns PROCESSING immediately.
+- Worker updates PostgreSQL status to SUCCESS.
+- Worker invalidates Redis transaction cache.
+
+Baseline endpoint:
+- POST /api/transactions/:id/confirm-sync
+- Validates transaction UUID.
+- Updates PostgreSQL status to SUCCESS during the HTTP request.
+- Deletes Redis transaction cache.
+- Reloads and returns the updated transaction.
+
+Purpose:
+- The async path demonstrates lower request latency by moving the write work to
+  RabbitMQ and the worker.
+- The sync path remains available for direct comparison.
+
+
+6. Redis Caching
+----------------
+
+Redis is optional. If Redis is unavailable, the application continues using
+PostgreSQL.
+
+Merchant cache:
+- Key: merchant:<qr_id>
+- TTL: 30 minutes
+- Warmed on startup.
+- Used for QRID lookup during scan.
+- Also populated during QRIS generation.
+
+Transaction cache:
+- Key: transaction:<transaction_id>
+- TTL: 10 minutes
+- Used for status polling.
+- Corrupted cached transaction payloads are deleted and reloaded from
+  PostgreSQL.
+
+Metrics:
+- cache_lookup_total
+- cache_write_total
+
+
+7. Frontend Applications
 ------------------------
 
-1. Toxiproxy integration
-- Added `toxiproxy` service to `docker-compose.yml`.
-- Exposed port `8081` (proxy) and `8474` (management API).
-- Created `k6/rural_test_setup.sh` to configure rural proxy.
-- Proxy adds 500ms latency with 100ms jitter.
-- Proxy limits bandwidth to ~400kbps (simulating 3G).
-- Allows both automated K6 testing and manual browser testing through rural conditions.
+Merchant dashboard:
+- Path: frontend/
+- Runs on port 5173.
+- Lists merchants and generates QRIS payloads.
+
+Customer app:
+- Path: customer-app/
+- Runs on port 5174.
+- Scans QRIS payloads.
+- Extracts merchant QRID and amount from the payload.
+- Creates transactions.
+- Confirms payment using the optimized async endpoint.
+- Checks transaction status.
+- Sends client latency telemetry with Axios interceptors.
+- API port is controlled by VITE_API_PORT, supplied by
+  CUSTOMER_APP_API_PORT in Docker Compose.
 
 
-Docs
-----
+8. Monitoring
+-------------
 
-1. Added flow documentation
-- `flow.txt`
-- `flow-mermaid.md`
+Prometheus:
+- Service is defined in docker-compose.yml.
+- Config is prometheus.yml.
+- Scrapes backend /metrics every 15 seconds.
 
-2. Updated documentation
-- Updated `flow.txt` with monitoring, K6, and Toxiproxy sections.
-- Updated `flow-mermaid.md` with monitoring and testing mermaid nodes.
-- Updated `changelog.md` with all new features.
-- Updated `README.md` with monitoring, load testing, and rural simulation sections.
+Grafana:
+- Service is defined in docker-compose.yml.
+- Datasource provisioning is under grafana/provisioning/datasources/.
+- Dashboard provisioning is under grafana/provisioning/dashboards/.
+- Dashboard JSON is grafana/dashboards/golang-metrics.json.
+
+Metrics currently exposed:
+- http_requests_total
+- http_request_duration_seconds
+- client_request_duration_seconds
+- transactions_created_total
+- payment_confirmations_total
+- payment_confirmation_duration_seconds
+- payment_worker_processed_total
+- payment_worker_duration_seconds
+- cache_lookup_total
+- cache_write_total
+
+
+9. Rural Network Simulation
+---------------------------
+
+Toxiproxy:
+- Service is defined in docker-compose.yml.
+- Management API: localhost:8474.
+- Rural proxy port: localhost:8081.
+
+Setup script:
+- k6/rural_test_setup.sh
+
+Configured toxics:
+- 500ms latency
+- 100ms jitter
+- 50KB/s bandwidth, approximately 400kbps
+
+Customer app mode script:
+- scripts/customer-app-mode.sh normal
+- scripts/customer-app-mode.sh rural
+- scripts/customer-app-mode.sh status
+
+
+10. Load Testing
+----------------
+
+K6 scripts:
+- k6/qris_generation.js
+- k6/scan_async_payment.js
+- k6/scan_sync_payment.js
+
+Normal network runner:
+- ./k6/run.sh qris
+- ./k6/run.sh async
+- ./k6/run.sh sync
+
+Rural network runner:
+- ./k6/run_rural.sh qris
+- ./k6/run_rural.sh async
+- ./k6/run_rural.sh sync
+
+The runners use Docker image grafana/k6 and target host.docker.internal.
+
+
+11. Operational URLs
+--------------------
+
+- Backend: http://localhost:8080
+- Merchant dashboard: http://localhost:5173
+- Customer app: http://localhost:5174
+- PostgreSQL: localhost:5432
+- Redis: localhost:6379
+- RedisInsight: http://localhost:5540
+- RabbitMQ management: http://localhost:15672
+- pgAdmin: http://localhost:5050
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000
+- Toxiproxy management: http://localhost:8474
+
+
+12. Documentation Files
+-----------------------
+
+- README.md: operator and developer guide.
+- report-purpose/flow.txt: detailed text flow.
+- report-purpose/flow-mermaid.md: Mermaid architecture flow.
+- report-purpose/changelog.md: current repository report.

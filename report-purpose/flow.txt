@@ -1,46 +1,104 @@
 QRIS Latency Optimizer Flow
 ===========================
 
-1. Merchant Data & Startup Flow
--------------------------------
-- Backend starts from backend/cmd/main.go.
-- Backend loads .env from repo root.
-- Backend connects to Postgres (timezone: Asia/Jakarta).
-- Backend runs GORM AutoMigrate for merchants and transactions.
-- Backend seeds default merchants.
-- Backend connects to Redis.
-- Backend warms merchant cache in Redis with all active merchants.
-- Backend connects to RabbitMQ.
-- Backend starts background Payment Consumer worker.
-- Backend starts HTTP server with graceful shutdown (SIGINT/SIGTERM).
+This report describes the current repository architecture and runtime flow.
 
 
-2. Merchant List Flow
+1. Runtime Components
 ---------------------
+
+- Backend API:
+  - Path: backend/
+  - Language/framework: Go + Gin
+  - Default port: 8080
+  - Responsibilities: QRIS generation, transaction creation, payment
+    confirmation, telemetry, metrics.
+
+- Merchant dashboard:
+  - Path: frontend/
+  - Framework: React + Vite
+  - Default port: 5173
+  - Responsibilities: select merchant, generate dynamic QRIS payload.
+
+- Customer app:
+  - Path: customer-app/
+  - Framework: React + Vite
+  - Default port: 5174
+  - Responsibilities: scan QRIS, create transaction, confirm payment, poll
+    transaction status, send client latency telemetry.
+
+- PostgreSQL:
+  - Source of truth for merchants and transactions.
+
+- Redis:
+  - Optional cache for merchant and transaction data.
+
+- RabbitMQ:
+  - Queue for optimized asynchronous payment confirmation.
+
+- Prometheus and Grafana:
+  - Observability stack for server latency, client latency, cache behavior, and
+    confirmation performance.
+
+- Toxiproxy:
+  - Rural network simulator exposed on port 8081.
+
+- K6:
+  - Load-testing scripts for QRIS generation, async confirmation, and sync
+    confirmation.
+
+
+2. Startup Flow
+---------------
+
+Backend startup begins in backend/cmd/main.go.
+
+Flow:
+- Load configuration from repo-root .env when running from backend/.
+- Connect to PostgreSQL using Asia/Jakarta timezone.
+- Create pgcrypto extension if needed.
+- Run GORM AutoMigrate for merchants and transactions.
+- Seed default active merchants:
+  - TEST001 / Kantin FILKOM UB
+  - TEST002 / TESTING STORE
+- Connect to Redis.
+- Warm Redis merchant cache with all active merchants.
+- Connect to RabbitMQ.
+- Create usecases and handlers.
+- Start payment consumer worker.
+- Start HTTP server on port 8080.
+- On SIGINT or SIGTERM, gracefully stop HTTP server and close RabbitMQ.
+
+
+3. Merchant List Flow
+---------------------
+
 Endpoint:
 GET /api/merchants
 
 Flow:
-- Frontend requests active merchants.
-- Backend queries Postgres merchants table where is_active = true.
-- Backend returns merchant list.
-- Frontend uses merchant UUID as selected merchant_id.
+- Merchant dashboard requests active merchants.
+- Backend queries PostgreSQL for merchants where is_active = true.
+- Backend returns the merchant list.
+- Dashboard uses the merchant UUID as merchant_id for QRIS generation.
 
 
-3. Generate QRIS Flow
+4. Generate QRIS Flow
 ---------------------
+
 Endpoint:
 GET /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
 
 Flow:
-- Frontend sends merchant UUID and amount.
-- Backend validates amount.
-- Backend checks merchant_id exists and merchant is active.
-- Backend builds QRIS payload in backend/internal/qris/payload.go.
-- QRIS payload includes:
+- Frontend submits merchant UUID and amount.
+- Backend validates amount is a positive integer.
+- Backend validates merchant_id is a UUID.
+- Backend loads merchant from PostgreSQL.
+- Backend caches merchant in Redis with key merchant:<qr_id>.
+- Backend starts speculative prefetch for related active merchants.
+- Backend generates a QRIS payload with:
   - tag 00: payload format indicator
   - tag 01: dynamic QR indicator
-  - tag 26: merchant account info
   - tag 26.00: QRIS domain
   - tag 26.01: merchant QRID, for example TEST001
   - tag 52: merchant category code
@@ -50,17 +108,16 @@ Flow:
   - tag 59: merchant name
   - tag 60: city, MALANG
   - tag 63: CRC checksum
-- Backend caches merchant data in Redis.
-- Backend starts related merchant prefetch in Redis.
-- Backend returns qris_payload to frontend.
+- Backend returns qris_payload, merchant_id, and amount.
 
 
-4. Customer Scan Flow
----------------
+5. Customer Scan Flow
+---------------------
+
 Endpoint:
 POST /api/transactions/scan
 
-Request body:
+Request:
 {
   "qr_payload": "<qris_payload>",
   "merchant_id": "TEST001",
@@ -68,220 +125,198 @@ Request body:
 }
 
 Flow:
-- Customer app scans QR.
-- Customer app parses QR payload locally.
-- Customer app extracts merchant QRID from QRIS tag 26.01.
-- Customer app extracts amount from QRIS tag 54.
-- Customer app submits qr_payload, merchant_id, and amount to backend.
-- Backend accepts merchant_id as either:
+- Customer app scans QRIS payload.
+- Customer app extracts merchant QRID from tag 26.01.
+- Customer app extracts amount from tag 54.
+- Customer app submits qr_payload, merchant_id, and amount.
+- Backend accepts merchant_id as:
   - merchant UUID
   - merchant QRID, for example TEST001
-- If merchant_id is QRID, backend checks Redis merchant cache first.
-- If merchant is not cached, backend queries Postgres.
-- Backend validates merchant exists and is active.
-- Backend parses QR payload server-side.
+- For QRID input, backend checks Redis merchant cache first.
+- If Redis misses, backend queries PostgreSQL and caches the merchant.
+- Backend parses the QRIS payload server-side.
 - Backend validates QR CRC.
-- Backend validates QR payload merchant QRID matches selected merchant.
-- Backend validates QR payload amount matches request amount.
-- Backend creates transaction in Postgres with status PENDING.
+- Backend validates QR merchant QRID matches selected merchant.
+- Backend validates QR amount matches request amount.
+- Backend creates a PENDING transaction in PostgreSQL.
 - Backend stores transaction JSON in Redis:
   - key: transaction:<transaction_id>
   - TTL: 10 minutes
 - Backend returns created transaction data.
 
 
-5. Transaction Status Flow
+6. Transaction Status Flow
 --------------------------
+
 Endpoint:
 GET /api/transactions/:id
 
 Flow:
-- Customer app requests transaction status.
-- Backend validates transaction ID is UUID.
-- Backend checks Redis first:
-  - key: transaction:<transaction_id>
-- If Redis cache hit:
+- Backend validates transaction ID is a UUID.
+- Backend checks Redis key transaction:<transaction_id>.
+- If Redis hits:
   - Backend unmarshals transaction JSON.
-  - Backend returns transaction data.
-  - Response message: transaction data (from cache)
-- If Redis cache missing or corrupted:
-  - Backend queries Postgres.
-  - Backend caches fresh transaction JSON in Redis.
-  - Backend returns transaction data.
-  - Response message: transaction data (from database)
+  - Backend returns transaction data with cached_from = true.
+- If Redis misses:
+  - Backend queries PostgreSQL.
+  - Backend stores fresh transaction JSON in Redis.
+  - Backend returns transaction data from database.
+- If cached data is corrupted:
+  - Backend deletes the corrupted cache key.
+  - Backend falls back to PostgreSQL.
 
 
-6. Confirm Payment Flow
------------------------
-Endpoint (Optimized - Asynchronous):
+7. Optimized Payment Confirmation Flow
+--------------------------------------
+
+Endpoint:
 POST /api/transactions/:id/confirm
 
-Flow (Optimized):
-- Customer app confirms payment.
-- Backend validates transaction ID is UUID.
-- Backend creates a JSON event with `transaction_id`.
-- Backend publishes event to RabbitMQ `payment_confirmations` queue.
-- Backend immediately returns PROCESSING status to frontend.
-- Background Worker consumes event from RabbitMQ.
-- Background Worker updates transaction status to SUCCESS in Postgres.
-- Background Worker deletes transaction cache in Redis.
-- Next status request reads Postgres first, then caches SUCCESS transaction again.
-- Later status requests return SUCCESS from Redis cache.
+Flow:
+- Backend validates transaction ID is a UUID.
+- Backend creates a JSON event containing transaction_id.
+- Backend publishes the event to RabbitMQ queue payment_confirmations.
+- Backend immediately returns PROCESSING to the frontend.
+- Payment consumer receives the RabbitMQ message.
+- Worker updates transaction status to SUCCESS in PostgreSQL.
+- Worker deletes Redis key transaction:<transaction_id>.
+- Next status request reads SUCCESS from PostgreSQL and repopulates Redis.
 
-Endpoint (Baseline - Synchronous):
+Purpose:
+- Removes the database update from the HTTP request path.
+- Gives the frontend a quick acknowledgement.
+- Buffers confirmation writes during load.
+
+
+8. Baseline Payment Confirmation Flow
+-------------------------------------
+
+Endpoint:
 POST /api/transactions/:id/confirm-sync
 
-Flow (Synchronous):
-- Customer app confirms payment.
-- Backend validates transaction ID is UUID.
-- Backend updates transaction status in Postgres to SUCCESS synchronously.
-- Backend deletes Redis cache key.
-- Backend reads updated transaction from Postgres.
-- Backend returns updated transaction data.
+Flow:
+- Backend validates transaction ID is a UUID.
+- Backend updates transaction status to SUCCESS in PostgreSQL inside the HTTP
+  request.
+- Backend deletes Redis key transaction:<transaction_id>.
+- Backend reloads the updated transaction from PostgreSQL.
+- Backend returns final SUCCESS transaction data.
+
+Purpose:
+- Provides a baseline for latency comparison against the RabbitMQ optimized
+  path.
 
 
-7. Redis Purpose
-----------------
-Redis is used as temporary cache.
+9. Redis Usage
+--------------
 
-Transaction cache:
-- Reduces repeated Postgres reads for transaction status polling.
-- Keeps status checks faster.
-- Cache key format:
-  - transaction:<transaction_id>
+Redis is a temporary cache. PostgreSQL remains the source of truth.
 
 Merchant cache:
-- Stores active merchant data.
-- Speeds up QRID-based merchant lookup during scan.
-- Cache key format:
-  - merchant:<qr_id>
+- Key format: merchant:<qr_id>
+- TTL: 30 minutes
+- Used for QRID-based lookup during customer scan.
+- Warmed on backend startup.
 
-Redis behavior:
-- If Redis is down, backend still works.
-- Cache reads miss.
-- Cache writes are skipped.
-- Postgres remains source of truth.
+Transaction cache:
+- Key format: transaction:<transaction_id>
+- TTL: 10 minutes
+- Used for repeated status polling.
 
-
-8. Important IDs
-----------------
-Merchant has two identifiers:
-
-ID:
-- UUID primary key in Postgres.
-- Used internally as merchant_id.
-- Example:
-  c75666bb-355f-4a33-90b2-bca767040be3
-
-QRID:
-- Merchant QR identifier stored in qr_id column.
-- Used inside QRIS payload tag 26.01.
-- Example:
-  TEST001
+Failure behavior:
+- If Redis is down, cache reads miss and cache writes are skipped.
+- Backend continues through PostgreSQL.
 
 
-9. Main Routes
---------------
+10. Identifiers
+---------------
+
+Merchant ID:
+- UUID primary key in PostgreSQL.
+- Used by the merchant dashboard when calling GET /api/qris.
+
+Merchant QRID:
+- Human-readable QR merchant code stored in qr_id.
+- Example: TEST001.
+- Embedded inside QRIS payload tag 26.01.
+- Used by the customer app after scanning QRIS.
+
+Transaction ID:
+- UUID primary key in PostgreSQL.
+- Used by status and confirmation routes.
+
+
+11. Main Routes
+---------------
+
 GET    /api/ping
 GET    /api/merchants
 GET    /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
+GET    /api/transactions/:id
 GET    /metrics
 POST   /api/transactions/scan
-GET    /api/transactions/:id
-POST   /api/transactions/:id/confirm         (Optimized, Asynchronous)
-POST   /api/transactions/:id/confirm-sync    (Baseline, Synchronous)
+POST   /api/transactions/:id/confirm
+POST   /api/transactions/:id/confirm-sync
 POST   /api/telemetry
 
 
-10. RabbitMQ Purpose
---------------------
-RabbitMQ is used as a high-performance message broker for asynchronous processing.
+12. Monitoring Flow
+-------------------
 
-Payment Confirmations Queue:
-- Takes heavy database update tasks off the main HTTP request thread.
-- Ensures immediate response to frontend (returns PROCESSING status).
-- Provides load buffering; database writes happen sequentially in the background worker without blocking web requests.
-- Results in improved P95 latency and higher throughput during peak load.
+Prometheus scrapes:
+GET /metrics
 
-
-11. Monitoring (Prometheus + Grafana)
--------------------------------------
-Prometheus scrapes the backend /metrics endpoint every 15 seconds.
-
-Server-side metrics collected:
-- http_requests_total: counter of all HTTP requests by method, path, status, and network_mode.
-- http_request_duration_seconds: histogram of request latency by method, path, and network_mode.
-- transactions_created_total: count of created payment transactions.
-- payment_confirmations_total: count of async/sync confirmation outcomes.
-- payment_confirmation_duration_seconds: async/sync confirmation latency.
-- payment_worker_processed_total: count of worker-processed async confirmations.
-- payment_worker_duration_seconds: worker processing latency.
-- cache_lookup_total: Redis lookup hit/miss/error count.
-- cache_write_total: Redis write success/error count.
-- Go runtime metrics: goroutines, heap memory, GC stats.
+Server-side metrics:
+- http_requests_total
+- http_request_duration_seconds
+- transactions_created_total
+- payment_confirmations_total
+- payment_confirmation_duration_seconds
+- payment_worker_processed_total
+- payment_worker_duration_seconds
+- cache_lookup_total
+- cache_write_total
 
 Client-side telemetry:
-- Customer app measures round-trip time for every API request using Axios interceptors.
-- Customer app sends measured duration to POST /api/telemetry.
-- Backend records this as client_request_duration_seconds in Prometheus with network_mode.
-- Allows direct comparison between server processing time and actual user experience.
+- Customer app Axios interceptors measure API request round-trip time.
+- Customer app sends telemetry to POST /api/telemetry.
+- Backend records client_request_duration_seconds.
 
-Grafana dashboard panels:
-- Live Overview: request rate, request totals, error rate, traffic split, transaction count, payment rate.
-- Normal vs Rural Latency: P95 server latency, P95 client latency, network overhead, slowest endpoints.
-- Payment Flow: async vs sync confirmation latency, queued async confirmations, worker throughput, worker P95.
-- Cache and Backend Health: merchant/transaction cache behavior, Redis writes, goroutines, heap memory.
+Network mode labels:
+- Port 8080 is recorded as normal.
+- Port 8081 is recorded as rural.
+- Other ports are recorded as unknown.
 
-Access:
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3000 (admin / admin)
-
-
-12. Load Testing (K6)
----------------------
-K6 is used for load testing and performance benchmarking.
-
-Test scripts in k6/ directory:
-- qris_generation.js: QRIS QR code generation under load.
-- scan_async_payment.js: Optimized payment flow (Scan + RabbitMQ confirm).
-- scan_sync_payment.js: Baseline payment flow (Scan + direct Postgres confirm).
-
-Each test ramps up to 20 virtual users over 50 seconds.
-Tests verify HTTP status codes and response payloads.
-
-Run normal load test:
-  ./k6/run.sh qris
-  ./k6/run.sh async
-  ./k6/run.sh sync
-
-Run rural load test (through Toxiproxy):
-  ./k6/run_rural.sh qris
-  ./k6/run_rural.sh async
-  ./k6/run_rural.sh sync
+Grafana:
+- Uses the provisioned Prometheus datasource.
+- Loads dashboard JSON from grafana/dashboards/golang-metrics.json.
+- Compares server latency, client latency, async/sync confirmation, worker
+  processing, cache metrics, and Go runtime metrics.
 
 
-13. Rural Network Simulation (Toxiproxy)
------------------------------------------
-Toxiproxy simulates poor rural 3G network conditions.
+13. Load Testing and Rural Simulation
+-------------------------------------
 
-Setup:
-- Toxiproxy container listens on port 8081.
-- Proxies traffic to Go backend on port 8080.
-- Configured with rural_test_setup.sh.
+K6 normal network commands:
+- ./k6/run.sh qris
+- ./k6/run.sh async
+- ./k6/run.sh sync
 
-Simulated conditions:
-- 500ms latency with 100ms jitter.
-- ~400kbps bandwidth limit (simulating 3G).
+Rural setup:
+- ./k6/rural_test_setup.sh
 
-Manual testing with customer app:
-- Customer app supports .env.rural with VITE_API_PORT=8081.
-- Run: cd customer-app && npm run dev -- --mode rural --host
-- All API traffic routes through Toxiproxy.
-- User experiences artificial rural lag.
-- Telemetry data appears on Grafana dashboard.
+Rural network behavior:
+- Toxiproxy listens on localhost:8081.
+- Requests are forwarded to the backend container on golang:8080.
+- Added latency: 500ms plus/minus 100ms jitter.
+- Bandwidth limit: 50KB/s, approximately 400kbps.
 
-Compare:
-  curl http://localhost:8080/api/ping   # normal (~7ms)
-  curl http://localhost:8081/api/ping   # rural (~500ms)
+K6 rural commands:
+- ./k6/run_rural.sh qris
+- ./k6/run_rural.sh async
+- ./k6/run_rural.sh sync
 
-Toxiproxy management API: http://localhost:8474
+Customer app Docker mode switch:
+- ./scripts/customer-app-mode.sh normal
+- ./scripts/customer-app-mode.sh rural
+- ./scripts/customer-app-mode.sh status

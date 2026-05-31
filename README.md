@@ -1,114 +1,158 @@
 # QRIS Latency Optimizer
 
-Full-stack QRIS payment simulation with:
-- Go backend
-- merchant dashboard
-- customer scanner app
-- Postgres for source of truth
-- Redis for cache and prefetch
-- RabbitMQ for async payment processing
-- Prometheus + Grafana for monitoring
-- Toxiproxy for rural network simulation
-- K6 for load testing
+Full-stack QRIS payment simulation focused on comparing normal and optimized
+payment-confirmation latency.
+
+The project includes:
+
+- Go backend API with Gin and clean repository/usecase layers
+- Merchant dashboard built with React + Vite
+- Customer scanner/payment app built with React + Vite
+- PostgreSQL as the source of truth
+- Redis cache for merchant lookup and transaction-status polling
+- RabbitMQ queue for asynchronous payment confirmation
+- Prometheus + Grafana monitoring
+- Toxiproxy rural-network simulation
+- K6 load-test scripts
 
 ## Project Structure
 
-- `backend/`
-  - Go API with Gin
-  - QR generation
-  - transaction lifecycle
-  - Redis cache and merchant prefetch
-  - RabbitMQ async payment confirmation
-- `frontend/`
-  - merchant dashboard
-  - React + Vite
-  - default port `5173`
-- `customer-app/`
-  - customer QR scanner app
-  - React + Vite
-  - default port `5174`
+```text
+backend/          Go API, domain/usecase/repository code, QRIS payload logic
+frontend/         Merchant dashboard, QRIS generation UI
+customer-app/     Customer QR scanner and payment confirmation UI
+k6/               Load-test scripts and rural proxy setup
+grafana/          Provisioned dashboard and datasource config
+report-purpose/   Architecture, flow, and report notes
+scripts/          Helper scripts for switching customer app network mode
+docker-compose.yml
+prometheus.yml
+```
 
 ## Stack
 
-- Go + Gin
-- PostgreSQL
-- Redis
-- RedisInsight
-- RabbitMQ
-- pgAdmin
+- Go, Gin, GORM
+- PostgreSQL 15
+- Redis 7
+- RabbitMQ management image
+- React 19 + Vite
 - Prometheus
 - Grafana
 - Toxiproxy
 - K6
 
-## Current Architecture Notes
+## Architecture Summary
 
-- Postgres is source of truth.
-- Redis is optional acceleration layer.
-- RabbitMQ is async processing layer for optimized payment confirmation.
-- Merchant data is seeded from Go startup, not SQL init file.
-- Backend auto-creates DB schema with GORM `AutoMigrate`.
-- Merchant cache is warmed into Redis on backend startup.
-- Transaction status uses cache-aside pattern:
-  - Redis first
-  - Postgres fallback
-  - cache repopulated after DB read
+- PostgreSQL is the source of truth for merchants and transactions.
+- The backend creates the `pgcrypto` extension, runs GORM `AutoMigrate`, and
+  seeds default merchants at startup.
+- Redis is an optional acceleration layer. If Redis is unavailable, the backend
+  continues through PostgreSQL.
+- Merchant data is warmed into Redis at startup and also cached when QRIS
+  payloads are generated or QRID lookups happen.
+- Transaction status uses cache-aside:
+  Redis first, PostgreSQL fallback, then Redis repopulation.
+- Optimized payment confirmation publishes work to RabbitMQ and returns
+  `PROCESSING` quickly. A background worker updates PostgreSQL to `SUCCESS` and
+  invalidates the transaction cache.
+- Synchronous confirmation is kept as a baseline comparison endpoint.
+- Prometheus records server latency, confirmation metrics, worker metrics,
+  cache metrics, and client-reported request latency.
+- Toxiproxy exposes port `8081` to simulate rural 3G-like latency and bandwidth.
 
-## How To Run
+## Environment
 
-### Prerequisites
+Create a repo-root `.env` file before running Docker Compose. The checked-in
+`.gitignore` intentionally ignores `.env`.
 
-Need:
-- Docker / Docker Desktop running
-- Go installed
-- Node.js installed
+Example:
 
-Create a local `.env` file from the example if it does not exist:
+```env
+DB_USER=user
+DB_PASSWORD=user
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=qrisdatabase
 
-```bash
-cp .env_example .env
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+
+RABBITMQ_USER=guest
+RABBITMQ_PASSWORD=guest
+RABBITMQ_HOST=localhost
+RABBITMQ_PORT=5672
+
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174
+
+CUSTOMER_APP_API_PORT=8080
+
+PGADMIN_DEFAULT_EMAIL=admin@admin.com
+PGADMIN_DEFAULT_PASSWORD=admin
+
+GF_AUTH_ANONYMOUS_ENABLED=true
+GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+GF_SECURITY_ADMIN_USER=admin
+GF_SECURITY_ADMIN_PASSWORD=12345
 ```
 
-The `.env` defaults are suitable for running the backend locally. Docker Compose
-overrides container-only hostnames internally, for example `DB_HOST=db`,
-`REDIS_HOST=redis`, and `RABBITMQ_HOST=rabbitmq`.
+Docker Compose overrides service hostnames internally. For example, the backend
+container receives `DB_HOST=db`, `REDIS_HOST=redis`, and
+`RABBITMQ_HOST=rabbitmq`.
 
-## 1. Start Infrastructure
+## Run With Docker Compose
 
-Run Docker services from repo root:
+From the repo root:
 
 ```bash
 docker compose up -d
 ```
 
 This starts:
-- Postgres
-- Redis
-- RedisInsight
-- pgAdmin
-- RabbitMQ
-- Prometheus
-- Grafana
-- Toxiproxy
 
-## 2. Backend Setup
+- Backend API on `http://localhost:8080`
+- Merchant dashboard on `http://localhost:5173`
+- Customer app on `http://localhost:5174`
+- PostgreSQL on `localhost:5432`
+- Redis on `localhost:6379`
+- RedisInsight on `http://localhost:5540`
+- RabbitMQ management on `http://localhost:15672`
+- pgAdmin on `http://localhost:5050`
+- Prometheus on `http://localhost:9090`
+- Grafana on `http://localhost:3000`
+- Toxiproxy management API on `http://localhost:8474`
 
-Start backend:
+Useful checks:
+
+```bash
+curl http://localhost:8080/api/ping
+curl http://localhost:8080/api/merchants
+curl http://localhost:8080/metrics
+```
+
+## Run Apps Manually
+
+For local development loops, start only the dependency containers you need, then
+run the backend and apps on the host:
+
+```bash
+docker compose up -d db redis rabbitmq redisinsight pgadmin toxiproxy
+```
+
+If the full Compose stack is already running, stop the app container you want to
+replace locally first, for example:
+
+```bash
+docker compose stop golang
+```
+
+Backend:
 
 ```bash
 cd backend
 go run ./cmd
 ```
 
-Backend runs on:
-
-```text
-http://localhost:8080
-```
-
-*Note: CORS is configured to allow dynamic development origins under ports `:5173` and `:5174` via `CORS_ALLOWED_ORIGINS`.*
-
-## 3. Merchant Dashboard
+Merchant dashboard:
 
 ```bash
 cd frontend
@@ -116,13 +160,7 @@ npm install
 npm run dev
 ```
 
-Frontend runs on:
-
-```text
-http://localhost:5173
-```
-
-## 4. Customer App
+Customer app:
 
 ```bash
 cd customer-app
@@ -130,97 +168,66 @@ npm install
 npm run dev
 ```
 
-Customer app runs on:
+Default local app URLs:
 
 ```text
-http://localhost:5174
+Backend:            http://localhost:8080
+Merchant dashboard: http://localhost:5173
+Customer app:       http://localhost:5174
 ```
 
-## Docker Web Tools
-
-### pgAdmin
-
-Open:
+## Main API Routes
 
 ```text
-http://localhost:5050
+GET  /api/ping
+GET  /api/merchants
+GET  /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
+GET  /api/transactions/:id
+GET  /metrics
+POST /api/transactions/scan
+POST /api/transactions/:id/confirm
+POST /api/transactions/:id/confirm-sync
+POST /api/telemetry
 ```
 
-### RedisInsight
+## Payment Flow
 
-Open:
-
-```text
-http://localhost:5540
-```
-
-Connect to Redis with:
-
-```text
-Host: redis
-Port: 6379
-```
-
-### RabbitMQ Management
-
-Open:
-
-```text
-http://localhost:15672
-```
-
-Default credentials: `guest` / `guest`
-
-## Main Backend Flow
-
-### Startup
-
-Backend startup does:
-- load `.env` from repo root
-- connect Postgres (timezone: Asia/Jakarta)
-- create `pgcrypto` extension if needed
-- auto-migrate tables
-- seed default merchants
-- connect Redis
-- warm merchant cache
-- connect RabbitMQ
-- start payment consumer worker
-- start HTTP server with graceful shutdown (SIGINT/SIGTERM)
-
-### Merchant Flow
-
-Endpoint:
+### 1. Merchant List
 
 ```text
 GET /api/merchants
 ```
 
-Returns active merchants from Postgres.
+Returns active merchants from PostgreSQL. The merchant dashboard uses the UUID
+`id` as `merchant_id` when generating QRIS payloads.
 
-### Generate QRIS
+Seeded merchants:
 
-Endpoint:
+```text
+TEST001 - Kantin FILKOM UB
+TEST002 - TESTING STORE
+```
+
+### 2. Generate QRIS
 
 ```text
 GET /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
 ```
 
-Flow:
-- validate amount
-- load merchant by UUID
-- generate QRIS payload from merchant QRID, merchant name, and amount (default city: MALANG)
-- cache merchant in Redis
-- prefetch related merchants
+The backend validates the merchant UUID and amount, loads the merchant from
+PostgreSQL, caches merchant data in Redis, prefetches related merchants, and
+returns a dynamic QRIS payload.
 
-### Customer Scan
+The QRIS payload includes merchant QRID in tag `26.01`, amount in tag `54`,
+merchant name in tag `59`, city `MALANG`, and a CRC checksum in tag `63`.
 
-Endpoint:
+### 3. Customer Scan
 
 ```text
 POST /api/transactions/scan
 ```
 
-Request body:
+Request:
 
 ```json
 {
@@ -230,220 +237,131 @@ Request body:
 }
 ```
 
-Flow:
-- customer app scans QR
-- extracts merchant QRID and amount from payload
-- sends payload to backend
-- backend accepts merchant ID as UUID or QRID like `TEST001`
-- backend validates:
-  - merchant exists and active
-  - QR CRC valid
-  - QR merchant matches request merchant
-  - QR amount matches request amount
-- backend creates `PENDING` transaction
-- backend caches transaction in Redis
+The customer app extracts QRID and amount from the scanned QRIS payload, then
+sends them to the backend. The backend accepts `merchant_id` as either merchant
+UUID or QRID, validates the QR CRC, verifies merchant and amount consistency,
+creates a `PENDING` transaction in PostgreSQL, and caches it in Redis for 10
+minutes.
 
-### Check Transaction Status
-
-Endpoint:
+### 4. Transaction Status
 
 ```text
 GET /api/transactions/:id
 ```
 
-Flow:
-- validate UUID
-- check Redis key `transaction:<id>`
-- if hit, return cached data
-- if miss, query Postgres
-- cache fresh transaction result
+The backend validates the UUID, checks Redis key `transaction:<id>`, falls back
+to PostgreSQL on miss or corrupted cache, and returns the transaction response.
 
-### Confirm Payment (Optimized - Async)
-
-Endpoint:
+### 5. Optimized Async Confirmation
 
 ```text
 POST /api/transactions/:id/confirm
 ```
 
-Flow:
-- validate UUID
-- publish confirmation event to RabbitMQ
-- return transaction with `PROCESSING` status
-- worker updates transaction to `SUCCESS`
-- worker deletes old transaction cache
+The backend validates the UUID, publishes `transaction_id` to RabbitMQ queue
+`payment_confirmations`, and immediately returns:
 
-### Confirm Payment (Baseline - Sync)
+```json
+{
+  "data": {
+    "transaction_id": "<uuid>",
+    "status": "PROCESSING"
+  },
+  "message": "payment accepted and is being processed in background"
+}
+```
 
-Endpoint:
+The payment worker consumes the message, updates the transaction to `SUCCESS`,
+and deletes the old Redis transaction cache.
+
+### 6. Baseline Sync Confirmation
 
 ```text
 POST /api/transactions/:id/confirm-sync
 ```
 
-Flow:
-- validate UUID
-- update transaction to `SUCCESS` directly in Postgres
-- delete old transaction cache
-- return updated transaction
+The backend updates PostgreSQL to `SUCCESS` during the HTTP request, deletes the
+Redis transaction cache, reloads the transaction, and returns the final data.
 
-## Redis Usage
-
-### Transaction Cache
-
-Used for:
-- repeated transaction status polling
-- lower DB load
-- faster response
-
-Redis key format:
+## Redis Keys
 
 ```text
-transaction:<transaction_id>
+merchant:<qr_id>          TTL 30 minutes
+transaction:<uuid>        TTL 10 minutes
 ```
 
-### Merchant Cache
-
-Used for:
-- QRID-based merchant lookup
-- startup warm cache
-- speculative related-merchant prefetch
-
-Redis key format:
-
-```text
-merchant:<qr_id>
-```
-
-If Redis is down:
-- backend still works
-- cache reads miss
-- cache writes are skipped
-- Postgres remains source of truth
-
-## Important Identifiers
-
-Merchant has two identifiers:
-
-- `ID`
-  - UUID primary key
-  - used internally in backend routes
-- `QRID`
-  - QR merchant code like `TEST001`
-  - stored in `qr_id`
-  - placed into QRIS payload tag `26.01`
-
-## API Routes
-
-```text
-GET  /api/ping
-GET  /api/merchants
-GET  /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
-GET  /metrics
-POST /api/transactions/scan
-GET  /api/transactions/:id
-POST /api/transactions/:id/confirm
-POST /api/transactions/:id/confirm-sync
-POST /api/telemetry
-```
-
-## Testing Quick Examples
-
-### Check transaction status
-
-```bash
-curl http://localhost:8080/api/transactions/<transaction_id>
-```
-
-### Confirm payment (async)
-
-```bash
-curl -X POST http://localhost:8080/api/transactions/<transaction_id>/confirm
-```
-
-### Confirm payment (sync baseline)
-
-```bash
-curl -X POST http://localhost:8080/api/transactions/<transaction_id>/confirm-sync
-```
-
-## Extra Docs
-
-- `report-purpose/flow.txt`
-- `report-purpose/flow-mermaid.md`
-- `report-purpose/changelog.md`
+Redis is used for faster lookups and lower database read load. PostgreSQL
+remains authoritative.
 
 ## Monitoring
 
-### Prometheus
-
-Prometheus scrapes the backend `/metrics` endpoint every 15 seconds.
-
-Open:
-
-```text
-http://localhost:9090
-```
-
-Check target status:
-
-```text
-http://localhost:9090/targets
-```
-
-### Grafana
-
-Pre-configured live simulation dashboard with:
-- request rate, request totals, and error rate
-- normal vs rural traffic split
-- P95 server latency, client latency, and network overhead
-- slowest endpoint table
-- async vs sync payment confirmation metrics
-- RabbitMQ worker processing metrics
-- Redis cache lookup/write metrics
-- Go goroutines and heap memory
+Prometheus scrapes `/metrics` every 15 seconds. Grafana is provisioned with a
+dashboard for normal vs rural traffic and backend vs client-perceived latency.
 
 Open:
 
 ```text
-http://localhost:3000
+Prometheus: http://localhost:9090
+Targets:    http://localhost:9090/targets
+Grafana:    http://localhost:3000
 ```
 
-Default credentials: `admin` / `admin`
+Default Grafana credentials come from `.env`; the example above uses
+`admin` / `12345`.
 
-### Client Telemetry
+Important metrics:
 
-The customer app automatically measures round-trip time for every API request and sends it to `POST /api/telemetry`. This data appears on the Grafana dashboard as `client_request_duration_seconds`, allowing comparison between server processing time and what the user actually experiences. Metrics include a `network_mode` label so normal port `8080` traffic and rural Toxiproxy port `8081` traffic can be compared live.
-
-## Load Testing (K6)
-
-K6 load test scripts are in the `k6/` directory.
-
-### Available Tests
-
-| Script | Description |
-|--------|-------------|
-| `qris_generation.js` | QRIS QR code generation under load |
-| `scan_async_payment.js` | Optimized payment flow (RabbitMQ) |
-| `scan_sync_payment.js` | Baseline payment flow (direct Postgres) |
-
-### Run Load Tests (Normal Network)
-
-```bash
-./k6/run.sh qris
-./k6/run.sh async
-./k6/run.sh sync
+```text
+http_requests_total
+http_request_duration_seconds
+client_request_duration_seconds
+transactions_created_total
+payment_confirmations_total
+payment_confirmation_duration_seconds
+payment_worker_processed_total
+payment_worker_duration_seconds
+cache_lookup_total
+cache_write_total
 ```
 
-### Run Load Tests (Rural 3G Simulation)
+The customer app records request round-trip duration with Axios interceptors and
+sends it to `POST /api/telemetry`. Metrics include `network_mode`, derived from
+port `8080` as `normal` and port `8081` as `rural`.
 
-First configure the rural proxy:
+## Load Testing With K6
+
+Scripts live in `k6/`.
+
+| Command | Scenario |
+| --- | --- |
+| `./k6/run.sh qris` | QRIS generation load test |
+| `./k6/run.sh async` | Optimized async scan + confirm flow |
+| `./k6/run.sh sync` | Baseline sync scan + confirm flow |
+
+The scripts run K6 through Docker using the `grafana/k6` image.
+
+## Rural Network Simulation
+
+Configure Toxiproxy after Compose is running:
 
 ```bash
 ./k6/rural_test_setup.sh
 ```
 
-Then run tests through the proxy:
+The proxy listens on `localhost:8081` and forwards to the backend with:
+
+- 500 ms latency
+- 100 ms jitter
+- 50 KB/s bandwidth, roughly 400 kbps
+
+Compare normal and rural:
+
+```bash
+curl http://localhost:8080/api/ping
+curl http://localhost:8081/api/ping
+```
+
+Run rural K6 tests:
 
 ```bash
 ./k6/run_rural.sh qris
@@ -451,23 +369,7 @@ Then run tests through the proxy:
 ./k6/run_rural.sh sync
 ```
 
-## Rural Network Simulation (Toxiproxy)
-
-Toxiproxy intercepts traffic on port `8081` and adds:
-- 500ms latency +/- 100ms jitter
-- ~400kbps bandwidth limit (simulating 3G)
-
-Compare normal vs rural:
-
-```bash
-curl http://localhost:8080/api/ping   # normal (~7ms)
-curl http://localhost:8081/api/ping   # rural (~500ms)
-```
-
-### Manual Rural Testing (Customer App)
-
-The Docker customer app can be switched between normal backend traffic and
-rural-simulated traffic:
+Switch Docker customer app mode:
 
 ```bash
 ./scripts/customer-app-mode.sh normal
@@ -475,38 +377,26 @@ rural-simulated traffic:
 ./scripts/customer-app-mode.sh status
 ```
 
-Normal mode sends customer app API traffic to backend port `8080`.
+Normal mode sends customer app traffic to backend port `8080`. Rural mode sends
+traffic through Toxiproxy port `8081` and recreates the customer app container
+with `CUSTOMER_APP_API_PORT=8081`.
 
-Rural mode configures Toxiproxy, recreates the customer app container, and sends
-customer app API traffic through port `8081`.
-
-The switch is controlled by `CUSTOMER_APP_API_PORT` in `.env`:
-
-```text
-CUSTOMER_APP_API_PORT=8080  # normal
-CUSTOMER_APP_API_PORT=8081  # rural
-```
-
-You can still run the customer app manually through the rural simulator:
+For manual local customer-app testing through the proxy:
 
 ```bash
 cd customer-app
-npm run dev -- --mode rural --host
+VITE_API_PORT=8081 npm run dev -- --host
 ```
 
-This routes all API traffic through Toxiproxy port `8081` instead of the direct backend port `8080`.
+## Phone Camera Notes
 
-Toxiproxy management API:
+Phone camera access can fail on plain LAN HTTP because browsers often require a
+secure origin for camera APIs. If the scanner does not open, check browser
+permissions and try a browser/device combination that allows camera access for
+your test origin.
 
-```text
-http://localhost:8474
-```
+## Extra Docs
 
-## Notes For Phone Testing
-
-Customer app camera on phone may fail on plain LAN HTTP because browser camera access often requires secure origin.
-
-If camera does not open:
-- check browser permission
-- try Chrome/Edge on Android or Safari on iPhone
-- if testing from phone over LAN, browser security may block camera on plain `http://<ip>:5174`
+- `report-purpose/flow.txt`
+- `report-purpose/flow-mermaid.md`
+- `report-purpose/changelog.md`
