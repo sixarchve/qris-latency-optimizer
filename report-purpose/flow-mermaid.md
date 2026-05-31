@@ -10,7 +10,9 @@ flowchart TD
     F --> G[Connect Redis]
     G --> H[Warm merchant cache]
     H --> I[Connect RabbitMQ]
-    I --> J[Start payment consumer worker]
+    I --> IQ[Declare payment_confirmations and merchant_notifications]
+    IQ --> WH[Start WebSocket hub]
+    WH --> J[Start payment and notification workers]
     J --> K[Start Gin HTTP server on 8080]
 
     MD[Merchant Dashboard] --> ML[GET /api/merchants]
@@ -51,11 +53,17 @@ flowchart TD
     AC2 --> AC4[Worker consumes payment_confirmations queue]
     AC4 --> AC5[Update PostgreSQL status to SUCCESS]
     AC5 --> AC6[Delete Redis transaction cache]
+    AC6 --> NQ[Publish merchant notification]
+    NQ --> NW[Notification worker consumes merchant_notifications]
+    NW --> WS[Push transaction_notification over /ws]
+    WS --> MD
     AC6 --> ST1
 
     CA --> SC1[POST /api/transactions/:id/confirm-sync]
     SC1 --> SC2[Update PostgreSQL status to SUCCESS during request]
     SC2 --> SC3[Delete Redis transaction cache]
+    SC3 --> SN[Publish merchant notification]
+    SN --> NW
     SC3 --> SC4[Reload transaction]
     SC4 --> SC5[Return SUCCESS]
 
@@ -74,6 +82,11 @@ flowchart TD
     GF[Grafana Dashboard] --> PR
     GF --> T4
 
+    MD --> WSC[GET /ws?merchant_id]
+    WSC --> WH
+    MD --> WSS[GET /api/ws/status]
+    WSS --> WH
+
     K6[K6 Tests] --> N1[Normal target port 8080]
     K6 --> R1[Rural target port 8081]
     R1 --> TX[Toxiproxy latency and bandwidth toxics]
@@ -85,6 +98,10 @@ flowchart TD
 - PostgreSQL is the source of truth.
 - Redis caches active merchants and recent transactions.
 - RabbitMQ powers the optimized asynchronous confirmation path.
+- RabbitMQ also carries merchant notification events.
+- `/ws?merchant_id=<uuid>` streams successful payment notifications to the
+  merchant dashboard.
+- `/api/ws/status` exposes connection and pending-notification counts.
 - `/confirm` returns `PROCESSING`; the worker later writes `SUCCESS`.
 - `/confirm-sync` is the baseline synchronous path.
 - Customer telemetry measures user-perceived request duration.

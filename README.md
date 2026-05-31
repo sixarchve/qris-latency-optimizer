@@ -11,6 +11,7 @@ The project includes:
 - PostgreSQL as the source of truth
 - Redis cache for merchant lookup and transaction-status polling
 - RabbitMQ queue for asynchronous payment confirmation
+- Merchant WebSocket notifications for successful payments
 - Prometheus + Grafana monitoring
 - Toxiproxy rural-network simulation
 - K6 load-test scripts
@@ -56,6 +57,8 @@ prometheus.yml
   `PROCESSING` quickly. A background worker updates PostgreSQL to `SUCCESS` and
   invalidates the transaction cache.
 - Synchronous confirmation is kept as a baseline comparison endpoint.
+- Successful confirmations publish merchant notifications to RabbitMQ. A
+  notification worker sends them to the merchant dashboard through `/ws`.
 - Prometheus records server latency, confirmation metrics, worker metrics,
   cache metrics, and client-reported request latency.
 - Toxiproxy exposes port `8081` to simulate rural 3G-like latency and bandwidth.
@@ -74,7 +77,7 @@ DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=qrisdatabase
 
-REDIS_HOST=127.0.0.1
+REDIS_HOST=localhost
 REDIS_PORT=6379
 
 RABBITMQ_USER=guest
@@ -84,7 +87,11 @@ RABBITMQ_PORT=5672
 
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174
 
-CUSTOMER_APP_API_PORT=8080
+WEBSOCKET_READ_DEADLINE=5m
+WEBSOCKET_WRITE_DEADLINE=10s
+WEBSOCKET_IDLE_CHECK_INTERVAL=1m
+WEBSOCKET_IDLE_THRESHOLD=4m
+WEBSOCKET_MAX_MESSAGE_SIZE=65536
 
 PGADMIN_DEFAULT_EMAIL=admin@admin.com
 PGADMIN_DEFAULT_PASSWORD=admin
@@ -183,6 +190,8 @@ GET  /api/ping
 GET  /api/merchants
 GET  /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
 GET  /api/transactions/:id
+GET  /api/ws/status?merchant_id=<merchant_uuid>
+GET  /ws?merchant_id=<merchant_uuid>
 GET  /metrics
 POST /api/transactions/scan
 POST /api/transactions/:id/confirm
@@ -272,7 +281,10 @@ The backend validates the UUID, publishes `transaction_id` to RabbitMQ queue
 ```
 
 The payment worker consumes the message, updates the transaction to `SUCCESS`,
-and deletes the old Redis transaction cache.
+deletes the old Redis transaction cache, and publishes a merchant notification.
+A notification worker consumes that event and pushes a
+`transaction_notification` message to connected merchant dashboard WebSocket
+clients.
 
 ### 6. Baseline Sync Confirmation
 
@@ -281,7 +293,28 @@ POST /api/transactions/:id/confirm-sync
 ```
 
 The backend updates PostgreSQL to `SUCCESS` during the HTTP request, deletes the
-Redis transaction cache, reloads the transaction, and returns the final data.
+Redis transaction cache, publishes a merchant notification, reloads the
+transaction, and returns the final data.
+
+## Merchant WebSocket Notifications
+
+The merchant dashboard connects to:
+
+```text
+GET /ws?merchant_id=<merchant_uuid>
+```
+
+When a transaction reaches `SUCCESS`, the backend publishes a notification to
+RabbitMQ queue `merchant_notifications`. The notification worker sends a
+`transaction_notification` message to every connected dashboard for that
+merchant. If the merchant is disconnected, the WebSocket hub keeps a small
+in-memory backlog and flushes it on reconnect.
+
+Check connection state and pending notifications with:
+
+```text
+GET /api/ws/status?merchant_id=<merchant_uuid>
+```
 
 ## Redis Keys
 
@@ -380,6 +413,9 @@ Switch Docker customer app mode:
 Normal mode sends customer app traffic to backend port `8080`. Rural mode sends
 traffic through Toxiproxy port `8081` and recreates the customer app container
 with `CUSTOMER_APP_API_PORT=8081`.
+
+`CUSTOMER_APP_API_PORT` is used as a shell-time Compose override by the mode
+script. It does not need to be stored in `.env` for normal operation.
 
 For manual local customer-app testing through the proxy:
 

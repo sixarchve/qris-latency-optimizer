@@ -35,6 +35,14 @@ This report describes the current repository architecture and runtime flow.
 
 - RabbitMQ:
   - Queue for optimized asynchronous payment confirmation.
+  - Queue for merchant payment notifications.
+
+- WebSocket hub:
+  - Path: backend/internal/websocket/
+  - Endpoint: /ws?merchant_id=<merchant_uuid>
+  - Responsibilities: keep merchant dashboard connections, queue a small
+    in-memory backlog when a merchant is disconnected, and flush pending
+    notifications when that merchant reconnects.
 
 - Prometheus and Grafana:
   - Observability stack for server latency, client latency, cache behavior, and
@@ -64,8 +72,10 @@ Flow:
 - Connect to Redis.
 - Warm Redis merchant cache with all active merchants.
 - Connect to RabbitMQ.
+- Declare payment_confirmations and merchant_notifications queues.
 - Create usecases and handlers.
-- Start payment consumer worker.
+- Initialize the WebSocket hub.
+- Start payment consumer and notification consumer workers.
 - Start HTTP server on port 8080.
 - On SIGINT or SIGTERM, gracefully stop HTTP server and close RabbitMQ.
 
@@ -180,6 +190,10 @@ Flow:
 - Payment consumer receives the RabbitMQ message.
 - Worker updates transaction status to SUCCESS in PostgreSQL.
 - Worker deletes Redis key transaction:<transaction_id>.
+- Worker publishes a SUCCESS notification to RabbitMQ queue
+  merchant_notifications.
+- Notification worker sends the event to connected merchant dashboard
+  WebSocket clients for that merchant.
 - Next status request reads SUCCESS from PostgreSQL and repopulates Redis.
 
 Purpose:
@@ -199,6 +213,8 @@ Flow:
 - Backend updates transaction status to SUCCESS in PostgreSQL inside the HTTP
   request.
 - Backend deletes Redis key transaction:<transaction_id>.
+- Backend publishes a SUCCESS notification to RabbitMQ queue
+  merchant_notifications.
 - Backend reloads the updated transaction from PostgreSQL.
 - Backend returns final SUCCESS transaction data.
 
@@ -253,6 +269,8 @@ GET    /api/ping
 GET    /api/merchants
 GET    /api/qris?merchant_id=<merchant_uuid>&amount=<amount>
 GET    /api/transactions/:id
+GET    /api/ws/status?merchant_id=<merchant_uuid>
+GET    /ws?merchant_id=<merchant_uuid>
 GET    /metrics
 POST   /api/transactions/scan
 POST   /api/transactions/:id/confirm
@@ -294,7 +312,31 @@ Grafana:
   processing, cache metrics, and Go runtime metrics.
 
 
-13. Load Testing and Rural Simulation
+13. Merchant Notification Flow
+------------------------------
+
+Endpoint:
+GET /ws?merchant_id=<merchant_uuid>
+
+Health/status endpoint:
+GET /api/ws/status?merchant_id=<merchant_uuid>
+
+Flow:
+- Merchant dashboard opens a WebSocket connection for the currently selected
+  merchant UUID.
+- When a payment reaches SUCCESS, the transaction usecase publishes a
+  notification payload to RabbitMQ queue merchant_notifications.
+- The notification worker consumes the payload and sends a
+  transaction_notification message through the WebSocket hub.
+- If the merchant has active dashboard connections, every connection receives
+  the message.
+- If the merchant is offline, the hub keeps up to 20 pending notifications in
+  memory and flushes them on the next connection for that merchant.
+- The dashboard displays a short transaction banner with merchant, amount, and
+  status details.
+
+
+14. Load Testing and Rural Simulation
 -------------------------------------
 
 K6 normal network commands:
