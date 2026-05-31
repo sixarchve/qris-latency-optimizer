@@ -12,6 +12,7 @@ import (
 
 	"qris-latency-optimizer/config"
 	"qris-latency-optimizer/delivery/handler"
+	"qris-latency-optimizer/internal/websocket"
 	"qris-latency-optimizer/repository/postgres"
 	"qris-latency-optimizer/repository/rabbitmq"
 	"qris-latency-optimizer/repository/redis"
@@ -23,15 +24,20 @@ func setupInfrastructure() {
 	config.Load()
 
 	postgres.ConnectDB()
+	fmt.Println("✓ PostgreSQL connected & migrated")
 
 	redis.ConnectRedis()
 	redis.WarmUpCache()
+	fmt.Println("✓ Redis connected & cache warmed")
 
 	rabbitmq.ConnectRabbitMQ()
 }
 
 func main() {
+	fmt.Println("=== QRIS Latency Optimizer Starting ===")
+
 	setupInfrastructure()
+	websocket.InitWSConfig()
 
 	merchantRepo := postgres.NewMerchantRepository(postgres.DB)
 	txRepo := postgres.NewTransactionRepository(postgres.DB)
@@ -48,11 +54,16 @@ func main() {
 		Telemetry:   handler.NewTelemetryHandler(),
 	}
 
-	// Start the RabbitMQ consumer worker
-	worker.StartPaymentConsumer(txUsecase)
+	wsHub := websocket.NewHub()
+	go wsHub.Run()
+	fmt.Println("✓ WebSocket Hub initialized")
 
-	// HTTP Server
-	r := handler.SetupRouter(handlers)
+	worker.SetWSHub(wsHub)
+	worker.StartPaymentConsumer(txUsecase)
+	worker.StartNotificationConsumer()
+	fmt.Println("✓ RabbitMQ workers started")
+
+	r := handler.SetupRouter(handlers, wsHub)
 
 	srv := &http.Server{
 		Addr:    ":8080",

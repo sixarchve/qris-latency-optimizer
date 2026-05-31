@@ -1,86 +1,78 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
+import NotificationListener from "./components/NotificationListener";
+import "./App.css";
 
-// BARU: Dynamic API URL berdasarkan hostname device
 const currentHostname = window.location.hostname;
-const API_BASE_URL = `http://${currentHostname}:8080/api`;
-
-function parseQrisPayload(payload) {
-  const result = { merchantName: "", city: "" };
-  if (!payload) return result;
-
-  let i = 0;
-  while (i < payload.length - 4) {
-    const tag = payload.substring(i, i + 2);
-    const len = parseInt(payload.substring(i + 2, i + 4), 10);
-    if (Number.isNaN(len)) break;
-
-    const value = payload.substring(i + 4, i + 4 + len);
-
-    if (tag === "59") result.merchantName = value;
-    if (tag === "60") result.city = value;
-
-    i += 4 + len;
-  }
-
-  return result;
-}
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (
+  window.location.port === "5173" || window.location.port === "5174"
+    ? "/api"
+    : `http://${currentHostname}:8080/api`
+);
 
 export default function App() {
   const [merchants, setMerchants] = useState([]);
   const [selectedMerchantId, setSelectedMerchantId] = useState("");
   const [selectedMerchantInfo, setSelectedMerchantInfo] = useState(null);
-
   const [payload, setPayload] = useState("");
-  const [merchant, setMerchant] = useState({ merchantName: "", city: "" });
   const [loading, setLoading] = useState(true);
   const [inputAmount, setInputAmount] = useState(1000);
   const [submittedAmount, setSubmittedAmount] = useState(1000);
 
-  // Load merchant list saat component mount
-useEffect(() => {
-  const fetchMerchants = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/merchants`);
-      const data = await response.json();
-      
-      // TAMBAHKAN: Map data agar lowercase
-      const normalizedMerchants = data.merchants.map(m => ({
-        id: m.ID,
-        qr_id: m.QRID,
-        merchant_name: m.MerchantName,
-        is_active: m.IsActive,
-        created_at: m.CreatedAt
-      }));
-      
-      setMerchants(normalizedMerchants);
-      if (normalizedMerchants.length > 0) {
-        setSelectedMerchantId(normalizedMerchants[0].id);
-        setSelectedMerchantInfo(normalizedMerchants[0]);
-      }
-    } catch (err) {
-      console.error("Failed to fetch merchants", err);
-    }
-  };
-  fetchMerchants();
-}, []);
+  // Notification state
+  const [showNotification, setShowNotification] = useState(false);
+  const [currentNotification, setCurrentNotification] = useState(null);
+  const hideNotificationTimerRef = useRef(null);
 
-  // Generate QRIS dengan merchant_id
+  useEffect(() => {
+    return () => {
+      if (hideNotificationTimerRef.current) {
+        clearTimeout(hideNotificationTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Load merchant list
+  useEffect(() => {
+    const fetchMerchants = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/merchants`);
+        const data = await response.json();
+
+        const normalizedMerchants = data.merchants.map(m => ({
+          id: m.ID,
+          qr_id: m.QRID,
+          merchant_name: m.MerchantName,
+          is_active: m.IsActive,
+          created_at: m.CreatedAt
+        }));
+
+        setMerchants(normalizedMerchants);
+        if (normalizedMerchants.length > 0) {
+          setSelectedMerchantId(normalizedMerchants[0].id);
+          setSelectedMerchantInfo(normalizedMerchants[0]);
+        }
+      } catch (err) {
+        console.error("Failed to fetch merchants", err);
+      }
+    };
+    fetchMerchants();
+  }, []);
+
+  // Generate QRIS
   useEffect(() => {
     if (!selectedMerchantId || !submittedAmount || submittedAmount <= 0) {
-      setPayload("");
+      queueMicrotask(() => setPayload(""));
       return;
     }
-    
-    setLoading(true);
-    // DIUBAH: Gunakan API_BASE_URL
+
+    queueMicrotask(() => setLoading(true));
     fetch(
       `${API_BASE_URL}/qris?merchant_id=${selectedMerchantId}&amount=${submittedAmount}`
     )
       .then((res) => res.json())
       .then((data) => {
         setPayload(data.qris_payload);
-        setMerchant(parseQrisPayload(data.qris_payload));
         setLoading(false);
       })
       .catch((err) => {
@@ -92,13 +84,31 @@ useEffect(() => {
   const handleMerchantChange = (e) => {
     const merchantId = e.target.value;
     setSelectedMerchantId(merchantId);
-    
+
     const selected = merchants.find((m) => m.id === merchantId);
     setSelectedMerchantInfo(selected);
-    
+
     setInputAmount(1000);
     setSubmittedAmount(1000);
   };
+
+  // Handler untuk notification dari WebSocket
+  const handleNotificationReceived = useCallback((notification) => {
+    console.log("🔔 Notification received:", notification);
+
+    setCurrentNotification(notification);
+    setShowNotification(true);
+
+    // Auto-hide setelah 5 detik
+    if (hideNotificationTimerRef.current) {
+      clearTimeout(hideNotificationTimerRef.current);
+    }
+
+    hideNotificationTimerRef.current = setTimeout(() => {
+      setShowNotification(false);
+    }, 8000);
+
+  }, []);
 
   const formatRupiah = new Intl.NumberFormat("id-ID", {
     style: "currency",
@@ -108,6 +118,37 @@ useEffect(() => {
 
   return (
     <div style={styles.page}>
+      {/* WebSocket Listener dengan merchant_id */}
+      <NotificationListener
+        onNotificationReceived={handleNotificationReceived}
+        merchantId={selectedMerchantId}
+        isActive={true}
+      />
+
+      {/* Notification Banner */}
+      {showNotification && currentNotification && (
+        <div style={styles.notificationBanner}>
+          <div style={styles.notificationContent}>
+            <span style={styles.notificationBell}>🔔</span>
+            <div style={styles.notificationText}>
+              <p style={styles.notificationTitle}>New Transaction!</p>
+              <p style={styles.notificationDetails}>
+                Merchant: <strong>{currentNotification.merchant_name}</strong>
+              </p>
+              <p style={styles.notificationDetails}>
+                ID: <code style={styles.notificationCode}>{currentNotification.merchant_id}</code>
+              </p>
+              <p style={styles.notificationDetails}>
+                Amount: <strong>{formatRupiah.format(currentNotification.amount || 0)}</strong>
+              </p>
+              <p style={{ ...styles.notificationDetails, fontSize: '11px', color: 'rgba(255,255,255,0.7)' }}>
+                {new Date().toLocaleTimeString()}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={styles.card}>
         <div style={styles.header}>
           <div>
@@ -333,5 +374,45 @@ const styles = {
     background: "#eee",
     padding: "6px 10px",
     borderRadius: "12px",
+  },
+  notificationBanner: {
+    position: "fixed",
+    top: "20px",
+    right: "20px",
+    background: "linear-gradient(135deg, #10b981, #059669)",
+    color: "white",
+    padding: "16px 24px",
+    borderRadius: "12px",
+    boxShadow: "0 10px 30px rgba(16, 185, 129, 0.3)",
+    zIndex: 9999,
+    maxWidth: "400px",
+    animation: "slideIn 0.3s ease-out",
+  },
+  notificationContent: {
+    display: "flex",
+    gap: "16px",
+    alignItems: "flex-start",
+  },
+  notificationBell: {
+    fontSize: "24px",
+  },
+  notificationText: {
+    flex: 1,
+  },
+  notificationTitle: {
+    margin: "0 0 8px 0",
+    fontSize: "16px",
+    fontWeight: "bold",
+  },
+  notificationDetails: {
+    margin: "4px 0",
+    fontSize: "13px",
+  },
+  notificationCode: {
+    background: "rgba(255, 255, 255, 0.2)",
+    padding: "2px 6px",
+    borderRadius: "4px",
+    fontFamily: "monospace",
+    fontSize: "12px",
   },
 };

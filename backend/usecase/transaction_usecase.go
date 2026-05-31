@@ -123,6 +123,15 @@ func (u *transactionUsecase) ConfirmPaymentSync(transactionIDStr string) (*entit
 		return nil, errors.New("transaction not found")
 	}
 
+	go func() {
+		_ = rabbitmq.PublishNotification(
+			tx.ID.String(),
+			tx.MerchantID.String(),
+			tx.Merchant.MerchantName,
+			tx.Amount,
+		)
+	}()
+
 	return &entity.TransactionResponse{
 		TransactionID: tx.ID.String(),
 		MerchantID:    tx.MerchantID.String(),

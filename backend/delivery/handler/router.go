@@ -2,6 +2,7 @@ package handler
 
 import (
 	"qris-latency-optimizer/delivery/middleware"
+	"qris-latency-optimizer/internal/websocket"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -15,7 +16,7 @@ type Handlers struct {
 	Telemetry   *TelemetryHandler
 }
 
-func SetupRouter(h *Handlers) *gin.Engine {
+func SetupRouter(h *Handlers, wsHub *websocket.Hub) *gin.Engine {
 	r := gin.Default()
 	middleware.CorsHandler(r)
 	r.Use(middleware.PrometheusMiddleware())
@@ -30,6 +31,21 @@ func SetupRouter(h *Handlers) *gin.Engine {
 	r.POST("/api/transactions/:id/confirm-sync", h.Transaction.ConfirmPaymentSync)
 	r.POST("/api/telemetry", h.Telemetry.ReceiveTelemetry)
 	r.GET("/api/ping", h.Ping.Ping)
+
+	r.GET("/api/ws/status", func(c *gin.Context) {
+		merchantID := c.Query("merchant_id")
+		response := gin.H{
+			"connected_count": wsHub.GetConnectedCount(),
+		}
+		if merchantID != "" {
+			response["merchant_id"] = merchantID
+			response["merchant_connected"] = wsHub.IsMerchantConnected(merchantID)
+			response["merchant_connection_count"] = wsHub.GetMerchantConnectionCount(merchantID)
+			response["pending_notifications"] = wsHub.GetPendingCount(merchantID)
+		}
+		c.JSON(200, response)
+	})
+	r.GET("/ws", wsHub.HandleWebSocket)
 
 	return r
 }

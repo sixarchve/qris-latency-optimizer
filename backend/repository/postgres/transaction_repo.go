@@ -20,7 +20,7 @@ func (r *transactionRepo) Create(tx *entity.Transaction) error {
 
 func (r *transactionRepo) FindByID(id string) (*entity.Transaction, error) {
 	var tx entity.Transaction
-	err := r.db.First(&tx, "id = ?", id).Error
+	err := r.db.Preload("Merchant").First(&tx, "id = ?", id).Error
 	return &tx, err
 }
 

@@ -7,9 +7,25 @@ import (
 	"time"
 
 	"qris-latency-optimizer/delivery/middleware"
+	"qris-latency-optimizer/internal/websocket"
 	"qris-latency-optimizer/repository/rabbitmq"
 	"qris-latency-optimizer/usecase"
 )
+
+type NotificationPayload struct {
+	TransactionID string    `json:"transaction_id"`
+	MerchantID    string    `json:"merchant_id"`
+	MerchantName  string    `json:"merchant_name"`
+	Amount        float64   `json:"amount"`
+	Status        string    `json:"status"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
+var WSHub *websocket.Hub
+
+func SetWSHub(hub *websocket.Hub) {
+	WSHub = hub
+}
 
 // StartPaymentConsumer runs a background goroutine to process async payment confirmations
 func StartPaymentConsumer(txUsecase usecase.TransactionUsecase) {
@@ -60,4 +76,62 @@ func StartPaymentConsumer(txUsecase usecase.TransactionUsecase) {
 	}()
 
 	fmt.Println("RabbitMQ Worker is running and waiting for messages...")
+}
+
+func StartNotificationConsumer() {
+	go func() {
+		channel := rabbitmq.Channel
+		if channel == nil {
+			log.Println("RabbitMQ channel not available, notification consumer not started")
+			return
+		}
+
+		q := rabbitmq.GetNotificationQueue()
+
+		msgs, err := channel.Consume(
+			q.Name,
+			"merchant-notification-consumer",
+			false, // manual ack
+			false,
+			false,
+			false,
+			nil,
+		)
+		if err != nil {
+			log.Fatalf("Failed to register RabbitMQ notification consumer: %v", err)
+		}
+
+		log.Println("RabbitMQ notification consumer is running and waiting for messages...")
+
+		for msg := range msgs {
+			var payload NotificationPayload
+			err := json.Unmarshal(msg.Body, &payload)
+			if err != nil {
+				log.Printf("[NotificationWorker] Failed to unmarshal message: %v", err)
+				msg.Nack(false, false)
+				continue
+			}
+
+			if WSHub != nil {
+				notification := map[string]interface{}{
+					"type":           "transaction_notification",
+					"transaction_id": payload.TransactionID,
+					"merchant_name":  payload.MerchantName,
+					"merchant_id":    payload.MerchantID,
+					"amount":         payload.Amount,
+					"status":         payload.Status,
+					"timestamp":      payload.Timestamp,
+				}
+
+				err := WSHub.SendToMerchant(payload.MerchantID, notification)
+				if err != nil {
+					log.Printf("[NotificationWorker] Failed to send via WebSocket: %v", err)
+				}
+			} else {
+				log.Println("[NotificationWorker] WebSocket hub not initialized")
+			}
+
+			msg.Ack(false)
+		}
+	}()
 }

@@ -24,6 +24,7 @@ type Config struct {
 	RabbitMQPassword string
 	RabbitMQHost     string
 	RabbitMQPort     string
+	RabbitMQURLRaw   string
 
 	CORSAllowedOrigins string
 }
@@ -52,6 +53,7 @@ func Load() {
 		RabbitMQPassword: getEnv("RABBITMQ_PASSWORD"),
 		RabbitMQHost:     getEnv("RABBITMQ_HOST"),
 		RabbitMQPort:     getEnv("RABBITMQ_PORT"),
+		RabbitMQURLRaw:   getEnv("RABBITMQ_URL"),
 
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS"),
 	}
@@ -64,5 +66,8 @@ func (c *Config) RedisAddr() string {
 }
 
 func (c *Config) RabbitMQURL() string {
+	if c.RabbitMQURLRaw != "" {
+		return c.RabbitMQURLRaw
+	}
 	return fmt.Sprintf("amqp://%s:%s@%s:%s/", c.RabbitMQUser, c.RabbitMQPassword, c.RabbitMQHost, c.RabbitMQPort)
 }
